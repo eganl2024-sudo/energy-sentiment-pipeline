@@ -54,6 +54,15 @@ with st.sidebar:
     timeframe = st.selectbox("Lookback Period", ["1 Year", "3 Years", "5 Years", "All Time"], index=2)
     end_date = df.index.max()
     
+    # Auto-Sync Logic: Map Timeframe to Signal Window defaults
+    signal_map_defaults = {
+        "1 Year": 1,   # Default to 90 Days
+        "3 Years": 2,  # Default to 1 Year
+        "5 Years": 3,  # Default to All Time
+        "All Time": 3
+    }
+    default_signal_index = signal_map_defaults.get(timeframe, 2)
+
     if timeframe == "1 Year": start_date = end_date - timedelta(days=365)
     elif timeframe == "3 Years": start_date = end_date - timedelta(days=365*3)
     elif timeframe == "5 Years": start_date = end_date - timedelta(days=365*5)
@@ -68,7 +77,7 @@ with st.sidebar:
     signal_window = st.selectbox(
         "Signal Calculation Period",
         ["30 Days", "90 Days", "1 Year", "All Time"],
-        index=2,
+        index=default_signal_index, # <--- Auto-syncs with Timeframe
         help="Time period for Z-score and percentile calculations"
     )
     window_map = {"30 Days": 30, "90 Days": 90, "1 Year": 252, "All Time": None}
@@ -115,7 +124,7 @@ st.info(summary_text)
 
 st.divider()
 
-# 1. KPI ROW (Fixed Deltas vs 30D MA)
+# 1. KPI ROW
 latest = df.iloc[-1]
 ma_30 = latest['Spread_30D_MA']
 delta_vs_ma = latest['Crack_Spread'] - ma_30
@@ -135,7 +144,7 @@ with c2:
         st.metric("Net Margin", "N/A", "Run Phase 7")
 
 with c3:
-    # Crude is standard price change
+    # Crude: Inverse Color (Lower is Green/Good for Refiners)
     prev = df.iloc[-2]
     st.metric("WTI Crude", f"${latest['Crude_Oil']:.2f}", f"{latest['Crude_Oil']-prev['Crude_Oil']:.2f}", delta_color="inverse")
 
@@ -145,7 +154,7 @@ with c4:
 with c5:
     # UPDATED: Shows Z-Score AND Percentile
     metrics = calculate_signal_metrics(df['Crack_Spread'], window=signal_days)
-    st.metric("Market Signal", metrics['signal'], f"Z: {metrics['z_score']:.2f}σ | Pctl: {metrics['percentile']:.0f}%", help="Z-score measures deviation from mean. Percentile shows rank vs history.")
+    st.metric("Market Signal", metrics['signal'], f"Z: {metrics['z_score']:.2f}σ | Pctl: {metrics['percentile']:.0f}%", help="Z-score vs. percentile: -1σ ≈ 16th %ile, 0σ = 50th %ile, +1σ ≈ 84th %ile")
 
 # 2. CHARTS & TRENDS
 st.subheader("📈 Margin Trends (Gross vs Net)")
@@ -173,7 +182,6 @@ for date, label in MARKET_EVENTS:
 fig.update_layout(height=500, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0.5, xanchor='center'))
 st.plotly_chart(fig, use_container_width=True)
 
-# OpEx Footnote
 st.caption("""**OpEx Assumptions:** Variable cost based on Natural Gas (NG=F) × 0.45 MMBtu/bbl. Fixed cost ($6/bbl) represents labor, maintenance, and catalyst expenses. *Industry range: $4-8/bbl.*""")
 
 if not events_visible:
@@ -184,7 +192,23 @@ st.divider()
 st.subheader("🔗 Market Intelligence")
 corr, r2, rolling = calculate_correlations(filtered_df, 'Crack_Spread', 'Valero')
 
-# UPDATED: Correlation Context
+# UPDATED: Methodology Expander
+with st.expander("🔬 Correlation Methodology: Levels vs. Returns", expanded=False):
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.write("**Method 1: Price Levels**")
+        st.caption("Correlates $22 spread vs. $183 stock price.")
+        st.metric("Correlation (Levels)", f"{corr:.2f}")
+    with col_b:
+        st.write("**Method 2: % Returns**")
+        st.caption("Correlates daily % change in spread vs VLO.")
+        returns = filtered_df[['Crack_Spread', 'Valero']].pct_change().dropna()
+        corr_returns = returns['Crack_Spread'].corr(returns['Valero'])
+        st.metric("Correlation (Returns)", f"{corr_returns:.2f}")
+    
+    st.info("**Analysis:** Stock prices trend up over time (earnings/buybacks) while spreads are cyclical. If 'Returns' correlation is higher, VLO reacts to daily spread changes, even if the long-term price trend is decoupled.")
+
+# Correlation Context Warning
 if abs(corr) > 0.7:
     corr_context = "🟢 Strong fundamental link"
 elif abs(corr) > 0.4:
@@ -193,12 +217,12 @@ else:
     corr_context = "🔴 Decoupled (sentiment/policy driven)"
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Correlation", f"{corr:.2f}", help="Pearson Coefficient (Levels)")
+c1.metric("Correlation (Levels)", f"{corr:.2f}", help="Pearson Coefficient")
 c2.metric("R-Squared", f"{r2:.2f}", help="Explained Variance")
 c3.metric("Link Strength", "Strong" if abs(corr)>0.7 else "Weak", help=corr_context)
 
-if abs(corr) < 0.3:
-    st.warning(f"⚠️ Weak correlation ({corr:.2f}) detected. VLO is likely trading on macro sentiment, buybacks, or forward earnings expectations rather than current spot margins.")
+if abs(corr) < 0.3 and abs(corr_returns) < 0.3:
+    st.warning(f"⚠️ Weak correlation detected in both Levels ({corr:.2f}) and Returns ({corr_returns:.2f}). VLO is likely trading on macro sentiment, buybacks, or forward earnings expectations rather than current spot margins.")
 
 t1, t2 = st.tabs(["Regime Analysis", "Fair Value Regression"])
 with t1:
