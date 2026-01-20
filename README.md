@@ -2,6 +2,7 @@
 **Real-Time Commodity Margin & Equity Valuation Monitor**
 
 **[🚀 Launch Live Dashboard →](https://refinery-arbitrage-engine-uturqbhqngbykahhfonr6k.streamlit.app/)**
+*(Click the link above to launch the live dashboard)*
 
 ### 📊 Business Context
 Refineries profit from the **"Crack Spread"**—the economic differential between crude oil input costs and refined product output prices (Gasoline & Diesel). This platform models the industry-standard **3:2:1 Crack Spread** to quantify the "Physical Reality" of the energy market and correlates it to downstream equity valuations.
