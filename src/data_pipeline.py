@@ -7,8 +7,7 @@ import sys
 # Add project root to path to import config
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.config import TICKERS
-
-DATA_PATH = "data/raw/market_data.csv"
+from src.db import write_raw, migrate_from_csv
 
 def fetch_market_data(period="5y", retries=3):
     """
@@ -51,8 +50,8 @@ def fetch_market_data(period="5y", retries=3):
         master_df.ffill(limit=3, inplace=True)
         master_df.dropna(inplace=True)
         
-        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-        master_df.to_csv(DATA_PATH)
+        # Write to DuckDB instead of CSV
+        write_raw(master_df)
         print(f"   • Rows Saved: {len(master_df)}")
         return master_df
     else:
@@ -60,4 +59,5 @@ def fetch_market_data(period="5y", retries=3):
         return None
 
 if __name__ == "__main__":
+    migrate_from_csv()
     fetch_market_data()

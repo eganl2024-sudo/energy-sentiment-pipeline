@@ -5,18 +5,16 @@ import sys
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.config import OPEX_DEFAULTS
-
-INPUT_PATH = "data/raw/market_data.csv"
-OUTPUT_PATH = "data/processed/spread_data.csv"
+from src.db import read_raw, write_processed
 
 def calculate_spread():
     print("⚙️ STARTING REFINERY PROCESS SIMULATION...")
     
-    if not os.path.exists(INPUT_PATH):
-        print(f"❌ Error: Input file not found at {INPUT_PATH}")
+    df = read_raw()
+    
+    if df.empty:
+        print(f"❌ Error: No raw market data found in DuckDB.")
         return
-        
-    df = pd.read_csv(INPUT_PATH, index_col=0, parse_dates=True)
     
     # 1. Gross Margin (The 3:2:1 Crack Spread)
     df['Gasoline_bbl'] = df['Gasoline'] * 42
@@ -43,9 +41,8 @@ def calculate_spread():
     df['Spread_30D_MA'] = df['Crack_Spread'].rolling(window=30).mean()
     df['Net_Margin_30D_MA'] = df['Net_Refining_Margin'].rolling(window=30).mean()
     
-    # Save
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    df.to_csv(OUTPUT_PATH)
+    # Save to DuckDB
+    write_processed(df)
     
     latest_gross = df['Crack_Spread'].iloc[-1]
     latest_net = df['Net_Refining_Margin'].iloc[-1]
@@ -53,6 +50,11 @@ def calculate_spread():
     print(f"✅ CALCULATION COMPLETE")
     print(f"   • Gross Margin: ${latest_gross:.2f}/bbl")
     print(f"   • Net Margin:   ${latest_net:.2f}/bbl (After OpEx)")
+
+def compute_correlation_returns(df, col1='Crack_Spread', col2='Valero'):
+    """Computes the Pearson correlation of daily percentage returns between two columns."""
+    returns = df[[col1, col2]].pct_change().dropna()
+    return returns[col1].corr(returns[col2])
 
 if __name__ == "__main__":
     calculate_spread()

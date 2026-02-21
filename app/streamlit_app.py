@@ -16,6 +16,7 @@ try:
     from src.valuation_model import calculate_ebitda_impact, calculate_share_price_impact
     from src.correlation_engine import calculate_correlations
     from src.report_generator import generate_executive_summary
+    from src.db import read_processed, read_table
 except ImportError as e:
     st.error(f"❌ Module Import Failed: {e}. Ensure you are running from the project root.")
     st.stop()
@@ -34,14 +35,11 @@ st.markdown("""
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
-    try:
-        path = "data/processed/spread_data.csv" if os.path.exists("data/processed/spread_data.csv") else "../data/processed/spread_data.csv"
-        df = pd.read_csv(path, parse_dates=['Date'])
-        df.set_index('Date', inplace=True)
-        return df
-    except FileNotFoundError:
+    df = read_processed()
+    if df.empty:
         st.error("❌ Data file not found. Please run the data pipeline first.")
         return pd.DataFrame()
+    return df
 
 df = load_data()
 if df.empty: st.stop()
@@ -117,129 +115,204 @@ with st.sidebar:
 st.title("🛢️ Refinery Arbitrage Engine")
 st.markdown("**Objective:** Quantify the theoretical margins (Gross & Net) of US Gulf Coast refineries.")
 
-# --- EXECUTIVE SUMMARY ---
-st.markdown("### 📝 Executive Briefing")
-summary_text = generate_executive_summary(filtered_df)
-st.info(summary_text)
+# --- TABS SETUP ---
+tabs = st.tabs(["📊 Market Dashboard", "📰 Sentiment & Topics"])
 
-st.divider()
+with tabs[0]:
+    # --- EXECUTIVE SUMMARY ---
+    st.markdown("### 📝 Executive Briefing")
+    summary_text = generate_executive_summary(filtered_df)
+    st.info(summary_text)
 
-# 1. KPI ROW
-latest = df.iloc[-1]
-ma_30 = latest['Spread_30D_MA']
-delta_vs_ma = latest['Crack_Spread'] - ma_30
+    st.divider()
 
-c1, c2, c3, c4, c5 = st.columns(5)
+    # 1. KPI ROW
+    latest = df.iloc[-1]
+    ma_30 = latest['Spread_30D_MA']
+    delta_vs_ma = latest['Crack_Spread'] - ma_30
 
-with c1:
-    st.metric("Gross Margin (3:2:1)", f"${latest['Crack_Spread']:.2f}", f"{delta_vs_ma:+.2f} vs 30D MA", help="Current spread relative to 30-day moving average")
+    c1, c2, c3, c4, c5 = st.columns(5)
 
-with c2:
-    if 'Net_Refining_Margin' in df.columns:
-        net_val = latest['Net_Refining_Margin']
-        net_ma_30 = latest['Net_Margin_30D_MA']
-        net_delta = net_val - net_ma_30
-        st.metric("Net Margin (After OpEx)", f"${net_val:.2f}", f"{net_delta:+.2f} vs 30D MA")
+    with c1:
+        st.metric("Gross Margin (3:2:1)", f"${latest['Crack_Spread']:.2f}", f"{delta_vs_ma:+.2f} vs 30D MA", help="Current spread relative to 30-day moving average")
+
+    with c2:
+        if 'Net_Refining_Margin' in df.columns:
+            net_val = latest['Net_Refining_Margin']
+            net_ma_30 = latest['Net_Margin_30D_MA']
+            net_delta = net_val - net_ma_30
+            st.metric("Net Margin (After OpEx)", f"${net_val:.2f}", f"{net_delta:+.2f} vs 30D MA")
+        else:
+            st.metric("Net Margin", "N/A", "Run Phase 7")
+
+    with c3:
+        # Crude: Inverse Color (Lower is Green/Good for Refiners)
+        prev = df.iloc[-2]
+        st.metric("WTI Crude", f"${latest['Crude_Oil']:.2f}", f"{latest['Crude_Oil']-prev['Crude_Oil']:.2f}", delta_color="inverse")
+
+    with c4:
+        st.metric("Valero (VLO)", f"${latest['Valero']:.2f}", f"{latest['Valero']-prev['Valero']:.2f}")
+
+    with c5:
+        # UPDATED: Shows Z-Score AND Percentile
+        metrics = calculate_signal_metrics(df['Crack_Spread'], window=signal_days)
+        st.metric("Market Signal", metrics['signal'], f"Z: {metrics['z_score']:.2f}σ | Pctl: {metrics['percentile']:.0f}%", help="Z-score vs. percentile: -1σ ≈ 16th %ile, 0σ = 50th %ile, +1σ ≈ 84th %ile")
+
+    # 2. CHARTS & TRENDS
+    st.subheader("📈 Margin Trends (Gross vs Net)")
+    fig = go.Figure()
+
+    # Gross Trace
+    fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Crack_Spread'], mode='lines', name='Gross Margin (3:2:1)', line=dict(color='#1f77b4', width=2)))
+
+    # Net Trace
+    if 'Net_Refining_Margin' in filtered_df.columns:
+        fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Net_Refining_Margin'], mode='lines', name='Net Margin (Realized)', line=dict(color='#2ca02c', width=2), fill='tonexty', fillcolor='rgba(44, 160, 44, 0.1)'))
+
+    # 30D MA Trace
+    fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Spread_30D_MA'], mode='lines', name='30D Avg (Gross)', line=dict(color='#ff7f0e', width=1, dash='dot')))
+
+    # Annotations
+    events_visible = False
+    for date, label in MARKET_EVENTS:
+        date_obj = pd.to_datetime(date)
+        if start_date <= date_obj <= end_date:
+            fig.add_vline(x=date, line_dash="dash", line_color="gray")
+            fig.add_annotation(x=date, y=filtered_df['Crack_Spread'].max(), text=label)
+            events_visible = True
+
+    fig.update_layout(height=500, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0.5, xanchor='center'))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("""**OpEx Assumptions:** Variable cost based on Natural Gas (NG=F) × 0.45 MMBtu/bbl. Fixed cost ($6/bbl) represents labor, maintenance, and catalyst expenses. *Industry range: $4-8/bbl.*""")
+
+    if not events_visible:
+        st.caption("ℹ️ No major market events in selected timeframe. Try '5 Years' to see historical catalysts.")
+
+    # 3. CORRELATION ENGINE
+    st.divider()
+    st.subheader("🔗 Market Intelligence")
+
+    @st.cache_data
+    def get_correlations(df):
+        return calculate_correlations(df, 'Crack_Spread', 'Valero')
+
+    corr, r2, rolling = get_correlations(filtered_df)
+
+    # UPDATED: Methodology Expander
+    with st.expander("🔬 Correlation Methodology: Levels vs. Returns", expanded=False):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.write("**Method 1: Price Levels**")
+            st.caption("Correlates $22 spread vs. $183 stock price.")
+            st.metric("Correlation (Levels)", f"{corr:.2f}")
+        with col_b:
+            st.write("**Method 2: % Returns**")
+            st.caption("Correlates daily % change in spread vs VLO.")
+            
+            @st.cache_data
+            def get_corr_returns(df):
+                from src.spread_calculator import compute_correlation_returns
+                return compute_correlation_returns(df, 'Crack_Spread', 'Valero')
+                
+            corr_returns = get_corr_returns(filtered_df)
+            st.metric("Correlation (Returns)", f"{corr_returns:.2f}")
+        
+        st.info("**Analysis:** Stock prices trend up over time (earnings/buybacks) while spreads are cyclical. If 'Returns' correlation is higher, VLO reacts to daily spread changes, even if the long-term price trend is decoupled.")
+
+    # Correlation Context Warning
+    if abs(corr) > 0.7:
+        corr_context = "🟢 Strong fundamental link"
+    elif abs(corr) > 0.4:
+        corr_context = "🟡 Moderate link (mixed drivers)"
     else:
-        st.metric("Net Margin", "N/A", "Run Phase 7")
+        corr_context = "🔴 Decoupled (sentiment/policy driven)"
 
-with c3:
-    # Crude: Inverse Color (Lower is Green/Good for Refiners)
-    prev = df.iloc[-2]
-    st.metric("WTI Crude", f"${latest['Crude_Oil']:.2f}", f"{latest['Crude_Oil']-prev['Crude_Oil']:.2f}", delta_color="inverse")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Correlation (Levels)", f"{corr:.2f}", help="Pearson Coefficient")
+    c2.metric("R-Squared", f"{r2:.2f}", help="Explained Variance")
+    c3.metric("Link Strength", "Strong" if abs(corr)>0.7 else "Weak", help=corr_context)
 
-with c4:
-    st.metric("Valero (VLO)", f"${latest['Valero']:.2f}", f"{latest['Valero']-prev['Valero']:.2f}")
+    if abs(corr) < 0.3 and abs(corr_returns) < 0.3:
+        st.warning(f"⚠️ Weak correlation detected in both Levels ({corr:.2f}) and Returns ({corr_returns:.2f}). VLO is likely trading on macro sentiment, buybacks, or forward earnings expectations rather than current spot margins.")
 
-with c5:
-    # UPDATED: Shows Z-Score AND Percentile
-    metrics = calculate_signal_metrics(df['Crack_Spread'], window=signal_days)
-    st.metric("Market Signal", metrics['signal'], f"Z: {metrics['z_score']:.2f}σ | Pctl: {metrics['percentile']:.0f}%", help="Z-score vs. percentile: -1σ ≈ 16th %ile, 0σ = 50th %ile, +1σ ≈ 84th %ile")
+    t1, t2 = st.tabs(["Regime Analysis", "Fair Value Regression"])
+    with t1:
+        st.plotly_chart(px.line(rolling, title="Rolling Correlation"), use_container_width=True)
+    with t2:
+        try:
+            st.plotly_chart(px.scatter(filtered_df, x='Crack_Spread', y='Valero', trendline='ols', title="Fair Value Model"), use_container_width=True)
+        except:
+            st.warning("Install statsmodels for trendlines.")
 
-# 2. CHARTS & TRENDS
-st.subheader("📈 Margin Trends (Gross vs Net)")
-fig = go.Figure()
+    # 4. VALUATION SENSITIVITY
+    st.divider()
+    st.subheader("⚡ Valuation Sensitivity")
+    impact = calculate_ebitda_impact(throughput, capture_rate, current_spread_val, shock_spread)
+    price_delta, _ = calculate_share_price_impact(VLO_DEFAULTS['current_ebitda'], impact, VLO_DEFAULTS['ev_ebitda_multiple'], shares)
 
-# Gross Trace
-fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Crack_Spread'], mode='lines', name='Gross Margin (3:2:1)', line=dict(color='#1f77b4', width=2)))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Scenario Spread", f"${shock_spread:.2f}", f"{shock_spread-current_spread_val:.2f} Delta", delta_color="off")
+    c2.metric("EBITDA Impact", f"${impact/1e6:,.0f} M", "Annualized", delta_color="inverse" if impact > 0 else "normal")
+    c3.metric("Share Price Impact", f"${price_delta:+.2f}", f"at {VLO_DEFAULTS['ev_ebitda_multiple']}x EV/EBITDA", delta_color="inverse" if impact > 0 else "normal")
 
-# Net Trace
-if 'Net_Refining_Margin' in filtered_df.columns:
-    fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Net_Refining_Margin'], mode='lines', name='Net Margin (Realized)', line=dict(color='#2ca02c', width=2), fill='tonexty', fillcolor='rgba(44, 160, 44, 0.1)'))
-
-# 30D MA Trace
-fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Spread_30D_MA'], mode='lines', name='30D Avg (Gross)', line=dict(color='#ff7f0e', width=1, dash='dot')))
-
-# Annotations
-events_visible = False
-for date, label in MARKET_EVENTS:
-    date_obj = pd.to_datetime(date)
-    if start_date <= date_obj <= end_date:
-        fig.add_vline(x=date, line_dash="dash", line_color="gray")
-        fig.add_annotation(x=date, y=filtered_df['Crack_Spread'].max(), text=label)
-        events_visible = True
-
-fig.update_layout(height=500, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0.5, xanchor='center'))
-st.plotly_chart(fig, use_container_width=True)
-
-st.caption("""**OpEx Assumptions:** Variable cost based on Natural Gas (NG=F) × 0.45 MMBtu/bbl. Fixed cost ($6/bbl) represents labor, maintenance, and catalyst expenses. *Industry range: $4-8/bbl.*""")
-
-if not events_visible:
-    st.caption("ℹ️ No major market events in selected timeframe. Try '5 Years' to see historical catalysts.")
-
-# 3. CORRELATION ENGINE
-st.divider()
-st.subheader("🔗 Market Intelligence")
-corr, r2, rolling = calculate_correlations(filtered_df, 'Crack_Spread', 'Valero')
-
-# UPDATED: Methodology Expander
-with st.expander("🔬 Correlation Methodology: Levels vs. Returns", expanded=False):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.write("**Method 1: Price Levels**")
-        st.caption("Correlates $22 spread vs. $183 stock price.")
-        st.metric("Correlation (Levels)", f"{corr:.2f}")
-    with col_b:
-        st.write("**Method 2: % Returns**")
-        st.caption("Correlates daily % change in spread vs VLO.")
-        returns = filtered_df[['Crack_Spread', 'Valero']].pct_change().dropna()
-        corr_returns = returns['Crack_Spread'].corr(returns['Valero'])
-        st.metric("Correlation (Returns)", f"{corr_returns:.2f}")
+with tabs[1]:
+    st.header("📰 EIA Sentiment Analysis")
     
-    st.info("**Analysis:** Stock prices trend up over time (earnings/buybacks) while spreads are cyclical. If 'Returns' correlation is higher, VLO reacts to daily spread changes, even if the long-term price trend is decoupled.")
-
-# Correlation Context Warning
-if abs(corr) > 0.7:
-    corr_context = "🟢 Strong fundamental link"
-elif abs(corr) > 0.4:
-    corr_context = "🟡 Moderate link (mixed drivers)"
-else:
-    corr_context = "🔴 Decoupled (sentiment/policy driven)"
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Correlation (Levels)", f"{corr:.2f}", help="Pearson Coefficient")
-c2.metric("R-Squared", f"{r2:.2f}", help="Explained Variance")
-c3.metric("Link Strength", "Strong" if abs(corr)>0.7 else "Weak", help=corr_context)
-
-if abs(corr) < 0.3 and abs(corr_returns) < 0.3:
-    st.warning(f"⚠️ Weak correlation detected in both Levels ({corr:.2f}) and Returns ({corr_returns:.2f}). VLO is likely trading on macro sentiment, buybacks, or forward earnings expectations rather than current spot margins.")
-
-t1, t2 = st.tabs(["Regime Analysis", "Fair Value Regression"])
-with t1:
-    st.plotly_chart(px.line(rolling, title="Rolling Correlation"), use_container_width=True)
-with t2:
-    try:
-        st.plotly_chart(px.scatter(filtered_df, x='Crack_Spread', y='Valero', trendline='ols', title="Fair Value Model"), use_container_width=True)
-    except:
-        st.warning("Install statsmodels for trendlines.")
-
-# 4. VALUATION SENSITIVITY
-st.divider()
-st.subheader("⚡ Valuation Sensitivity")
-impact = calculate_ebitda_impact(throughput, capture_rate, current_spread_val, shock_spread)
-price_delta, _ = calculate_share_price_impact(VLO_DEFAULTS['current_ebitda'], impact, VLO_DEFAULTS['ev_ebitda_multiple'], shares)
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Scenario Spread", f"${shock_spread:.2f}", f"{shock_spread-current_spread_val:.2f} Delta", delta_color="off")
-c2.metric("EBITDA Impact", f"${impact/1e6:,.0f} M", "Annualized", delta_color="inverse" if impact > 0 else "normal")
-c3.metric("Share Price Impact", f"${price_delta:+.2f}", f"at {VLO_DEFAULTS['ev_ebitda_multiple']}x EV/EBITDA", delta_color="inverse" if impact > 0 else "normal")
+    @st.cache_data
+    def load_sentiment_data():
+        df_merged = read_table('sentiment_spread_merged')
+        df_merged['report_date'] = pd.to_datetime(df_merged['report_date'])
+        df_merged.set_index('report_date', inplace=True)
+        
+        df_roll = read_table('sentiment_spread_rolling_corr')
+        df_roll['date'] = pd.to_datetime(df_roll['date'])
+        
+        df_sent = read_table('eia_sentiment')
+        return df_merged, df_roll, df_sent
+        
+    df_merged, df_roll, df_sent = load_sentiment_data()
+    
+    if df_sent.empty or df_merged.empty:
+        st.warning("No sentiment data available. Please run the NLP pipeline.")
+    else:
+        latest_sent = df_sent.iloc[-1]
+        last_4_avg = df_sent['compound'].tail(4).mean()
+        total_reports = len(df_sent)
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Latest Sentiment Score", f"{latest_sent['compound']:.2f}")
+        m2.metric("4-Week Avg Sentiment", f"{last_4_avg:.2f}")
+        m3.metric("Total Reports Analyzed", f"{total_reports}")
+        m4.metric("Granger Causality", "Not Significant", "p>0.05 all lags", delta_color="off")
+        
+        st.divider()
+        st.subheader("Sentiment vs. Crack Spread")
+        from plotly.subplots import make_subplots
+        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+        fig2.add_trace(go.Scatter(x=df_merged.index, y=df_merged['compound'], name="Sentiment (Compound)", line=dict(color='#1f77b4')), secondary_y=False)
+        fig2.add_trace(go.Scatter(x=df_merged.index, y=df_merged['Crack_Spread'], name="Crack Spread ($/bbl)", line=dict(color='#ff7f0e')), secondary_y=True)
+        fig2.update_layout(title="EIA Sentiment vs. 3:2:1 Crack Spread", hovermode="x unified", legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'))
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        st.divider()
+        st.subheader("Sentiment Correlation")
+        fig3 = px.line(df_roll, x='date', y='rolling_corr', title="Rolling 90-Day Sentiment-Spread Correlation")
+        fig3.add_hline(y=0, line_dash="dash", line_color="gray")
+        st.plotly_chart(fig3, use_container_width=True)
+        
+        st.divider()
+        st.subheader("Topic Extractor")
+        topic_summary = df_sent.groupby('dominant_topic').agg(
+            Avg_Sentiment=('compound', 'mean'),
+            Report_Count=('compound', 'count')
+        ).reset_index()
+        topic_summary.rename(columns={'dominant_topic': 'Topic', 'Avg_Sentiment': 'Avg Sentiment', 'Report_Count': 'Report Count'}, inplace=True)
+        st.dataframe(topic_summary, use_container_width=True)
+        st.caption("LDA Topic Modeling — 5 topics extracted via sklearn")
+        
+        with st.expander("🔬 About This Analysis"):
+            st.markdown(f"**Methodology:** {total_reports} EIA reports scraped (2022-2025). "
+                        "Reports were scored using VADER for sentiment polarity and processed using scikit-learn's LatentDirichletAllocation (LDA) to extract 5 topics. "
+                        "Granger causality was tested on the merged dataset at lags of 1-4 weeks between sentiment and crack spreads, which found no significant predictive relationship (p > 0.05) - "
+                        "an outcome consistent with semi-strong market efficiency where public EIA data is instantly priced into front-month futures.")

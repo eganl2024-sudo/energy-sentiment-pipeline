@@ -1,58 +1,85 @@
-# 🛢️ Refinery Arbitrage Engine
-**Real-Time Commodity Margin & Equity Valuation Monitor**
+# Refinery Arbitrage Engine
 
-**[🚀 Launch Live Dashboard →](https://refinery-arbitrage-engine-uturqbhqngbykahhfonr6k.streamlit.app/)**
-
-### 📊 Business Context
-Refineries profit from the **"Crack Spread"**—the economic differential between crude oil input costs and refined product output prices (Gasoline & Diesel). This platform models the industry-standard **3:2:1 Crack Spread** to quantify the "Physical Reality" of the energy market and correlates it to downstream equity valuations.
-
-**The "So What?" for Investors:**
-When physical margins compress, refinery valuations contract. This engine answers: *If the crack spread drops by $5/bbl today, what is the implied EBITDA impact for Valero (VLO)?*
+A live financial analytics platform that models US Gulf Coast refinery economics and tests whether institutional energy commentary predicts margin movements.
 
 ---
 
-### 🚀 Key Intelligence Modules
+## Overview
 
-#### 1. The Physical Arbitrage Monitor (`spread_calculator.py`)
-* **Logic:** Implements the **3:2:1 Mass Balance** formula: `(2 * Gasoline + 1 * Distillate - 3 * Crude) / 3`.
-* **Unit Operations:** Automatically handles unit conversion (Gallons $\to$ Barrels) and aligns Futures contract expirations.
-* **Alpha:** Identifies "margin expansion" events in real-time.
+The engine computes real-time 3:2:1 crack spreads — the benchmark measure of refinery profitability — by pricing WTI crude inputs against RBOB gasoline and heating oil outputs. It extends this physical margin into net profitability by modeling variable and fixed operating costs, then translates margin shocks into EBITDA and share price impacts for Valero (VLO) using a cycle-aware valuation framework.
 
-#### 2. Valuation Sensitivity Model (`valuation_model.py`)
-* **Goal:** Quantify **Operational Leverage**.
-* **Methodology:** A "DCF-Lite" engine that simulates EBITDA shocks based on spread volatility.
-* **Scenario:** *User Input:* "What if margins crash to $15/bbl?" $\to$ *Output:* "VLO Share Price implied impact: -$12.45".
-
-#### 3. Statistical Correlation Engine (`correlation_engine.py`)
-* **Hypothesis:** Downstream equities are mathematically coupled to physical margins.
-* **Proof:** Calculates **90-Day Rolling Correlations** to visualize "Regime Changes".
-* **Metrics:** Real-time **R-Squared ($R^2$)**, **Z-Score**, and **Percentile Rank**.
-
-#### 4. Automated Reporting (`report_generator.py`)
-* **Output:** Auto-generates executive briefings summarizing current market breadth, margin percentile, and valuation impact.
+A second research layer scrapes and analyzes 87 institutional reports from the U.S. Energy Information Administration (2022–2026), applying VADER sentiment analysis and LDA topic modeling to test a practical question in commodity finance: does public institutional commentary lead or lag the market it describes?
 
 ---
 
-### 🛠️ Technical Stack
-* **Core Logic:** Python (Pandas, NumPy, SciPy)
-* **Visualization:** Streamlit, Plotly Interactive
-* **Statistics:** Statsmodels (OLS Regression), Rolling Window Analysis
-* **Data Pipeline:** `yfinance` API (Real-time Futures: CL=F, RB=F, HO=F, NG=F)
+## Research Question
+
+**Does EIA sentiment Granger-cause crack spread movements?**
+
+Bidirectional Granger causality tests at lags of 1–4 weeks found no significant relationship in either direction (all p > 0.05). The result is consistent with semi-strong market efficiency: by the time institutional commentary is published, its signal is already priced. The corpus also spans a structural break — EIA discontinued its long-form *This Week in Petroleum* reports in January 2024, replacing them with shorter *Today in Energy* articles — which introduces a measurable shift in document length and sentiment distribution that itself warrants analysis.
 
 ---
 
-### 💻 Local Installation
+## Architecture
+
+| Module | Function |
+|---|---|
+| `src/data_pipeline.py` | Market data ingestion via yfinance (CL=F, RB=F, HO=F, NG=F, VLO, PSX) |
+| `src/db.py` | DuckDB database layer — all I/O, table init, and read/write helpers |
+| `src/spread_calculator.py` | 3:2:1 crack spread, net margin, and moving average calculations |
+| `src/signal_generator.py` | Z-score and percentile market signal metrics |
+| `src/correlation_engine.py` | VLO price correlation and rolling OLS regression |
+| `src/valuation_model.py` | EBITDA sensitivity, cyclical EV/EBITDA multiples, run-cut logic |
+| `src/eia_scraper.py` | Hybrid scraper across TWIP archive and Today in Energy (87 reports) |
+| `src/nlp_pipeline.py` | VADER sentiment scoring and sklearn LDA topic modeling (5 topics) |
+| `src/causality_analysis.py` | Bidirectional Granger causality, 4-lag window, rolling correlation |
+| `app/streamlit_app.py` | Two-tab Streamlit dashboard: Market Dashboard and Sentiment & Topics |
+
+---
+
+## Data
+
+**Market prices:** 5-year daily history for WTI crude, RBOB gasoline, heating oil, natural gas, Valero, and Phillips 66.
+
+**Text corpus:** 87 EIA institutional reports spanning January 2022 through February 2026, drawn from two sources:
+- *This Week in Petroleum* weekly reports (2022–2023) — structured long-form analysis, averaging 800–1,400 words
+- *EIA Today in Energy* petroleum articles (2024–2026) — shorter-form successors, averaging 400–800 words
+
+---
+
+## Valuation Model
+
+Two structural upgrades replace the naive linear model with cycle-aware logic:
+
+**Cyclical multiples.** The EV/EBITDA multiple applied to margin shocks adjusts inversely with the spread's Z-score — from 8.5x at trough conditions to 4.5x at peak — reflecting the empirical pattern of multiple compression when earnings are at cycle highs and expansion when they are at lows.
+
+**Economic run-cut floor.** When the scenario spread falls below the $7.50/bbl operating breakeven, throughput is reduced programmatically (20% below breakeven, 40% at zero margin) to emulate real-world margin protection behavior. Bear-case scenarios are materially more adverse than a linear model would suggest.
+
+---
+
+## Limitations
+
+- An 87-document corpus is modest for time-series causality work; results should be interpreted directionally rather than conclusively
+- The January 2024 TWIP discontinuation introduces a structural break in document format that may reduce sentiment comparability across the full time series
+- yfinance is a free-tier data source subject to rate limiting and occasional gaps; institutional-grade feeds would improve pipeline reliability
+
+---
+
+## How to Run
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/Refinery-Arbitrage-Engine.git
+# 1. Create and activate a Python 3.11 virtual environment
+py -3.11 -m venv venv
+venv\Scripts\activate
 
-# 2. Install dependencies
+# 2. Install pinned dependencies
 pip install -r requirements.txt
 
-# 3. Run the data pipeline
+# 3. Run the pipeline in sequence
 python src/data_pipeline.py
-python src/spread_calculator.py
+python src/eia_scraper.py
+python src/nlp_pipeline.py
+python src/causality_analysis.py
 
 # 4. Launch the dashboard
 streamlit run app/streamlit_app.py
@@ -60,32 +87,6 @@ streamlit run app/streamlit_app.py
 
 ---
 
-### 🔑 Key Findings (2020-2025 Data)
-- **Average Gross Margin:** $23.80/bbl (3:2:1 crack spread)
-- **Current State:** ~$22.56/bbl (77th percentile - historically high)
-- **VLO Correlation:** 0.26 (daily returns) vs 0.11 (price levels)
-  - *Insight:* VLO reacts to short-term margin volatility but long-term equity is driven more by capital allocation (buybacks) than spot spreads.
-- **Valuation Impact:** $5 spread change ≈ **$4.5B annualized EBITDA impact** for Valero.
+## Tech Stack
 
----
-
-### 📸 Dashboard Preview
-
-#### Full Analytics Platform
-![Dashboard Overview](assets/screenshots/dashboard_overview.png)
-*Integrated analytics platform featuring auto-generated executive briefing, real-time margin monitoring, and sensitivity analysis.*
-
-#### Correlation Methodology
-![Correlation Analysis](assets/screenshots/correlation_analysis.png)
-*Dual-methodology approach comparing Price Level vs. Return correlations.*
-
-#### Valuation Sensitivity
-![Valuation Model](assets/screenshots/valuation_model.png)
-*Interactive scenario testing with Bear/Base/Bull presets.*
-
----
-
-### ⚖️ Disclaimer
-This project is for educational and portfolio purposes only. It uses free-tier data (Yahoo Finance) which may have delays. Not financial advice.
-
-**Built by Liam Egan** | [LinkedIn](https://linkedin.com/in/liam-egan) | [GitHub](https://github.com/ljegan)
+Python 3.11 · DuckDB · Streamlit · yfinance · VADER · scikit-learn · statsmodels · BeautifulSoup4 · Plotly
