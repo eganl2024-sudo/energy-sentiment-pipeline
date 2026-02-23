@@ -4,24 +4,34 @@ import yfinance as yf
 import plotly.graph_objects as go
 import datetime
 import requests
+import time
 
 HF_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
 
 def score_with_finbert(headline: str, api_token: str) -> dict:
     headers = {"Authorization": f"Bearer {api_token}"}
     payload = {"inputs": headline}
-    try:
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=10)
-        result = response.json()
-        if isinstance(result, list) and len(result) > 0:
-            # FinBERT returns list of [{label, score}] sorted by score desc
-            top = sorted(result[0], key=lambda x: x['score'], reverse=True)[0]
-            label = top['label'].lower()  # 'positive', 'negative', 'neutral'
-            score = top['score']
-            sentiment_map = {'positive': 'Bullish', 'negative': 'Bearish', 'neutral': 'Neutral'}
-            return {'sentiment': sentiment_map.get(label, 'Neutral'), 'score': round(score, 3)}
-    except Exception:
-        pass
+    
+    for attempt in range(3):  # retry up to 3 times
+        try:
+            response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=15)
+            if response.status_code == 503:
+                time.sleep(5)  # model loading, wait and retry
+                continue
+            if response.status_code != 200:
+                st.warning(f"HF API {response.status_code}: {response.text}")
+                return {'sentiment': 'Neutral', 'score': 0.0}
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                top = sorted(result[0], key=lambda x: x['score'], reverse=True)[0]
+                label = top['label'].lower()
+                score = top['score']
+                sentiment_map = {'positive': 'Bullish', 'negative': 'Bearish', 'neutral': 'Neutral'}
+                return {'sentiment': sentiment_map.get(label, 'Neutral'), 'score': round(score, 3)}
+        except Exception as e:
+            st.warning(f"FinBERT error: {e}")
+            return {'sentiment': 'Neutral', 'score': 0.0}
+            
     return {'sentiment': 'Neutral', 'score': 0.0}
 
 # --- Configuration ---
