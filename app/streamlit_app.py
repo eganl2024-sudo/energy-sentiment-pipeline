@@ -3,15 +3,26 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import datetime
-from transformers import pipeline
+import requests
 
-@st.cache_resource
-def load_finbert():
-    return pipeline(
-        "text-classification",
-        model="ProsusAI/finbert",
-        tokenizer="ProsusAI/finbert"
-    )
+HF_API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
+
+def score_with_finbert(headline: str, api_token: str) -> dict:
+    headers = {"Authorization": f"Bearer {api_token}"}
+    payload = {"inputs": headline}
+    try:
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=10)
+        result = response.json()
+        if isinstance(result, list) and len(result) > 0:
+            # FinBERT returns list of [{label, score}] sorted by score desc
+            top = sorted(result[0], key=lambda x: x['score'], reverse=True)[0]
+            label = top['label'].lower()  # 'positive', 'negative', 'neutral'
+            score = top['score']
+            sentiment_map = {'positive': 'Bullish', 'negative': 'Bearish', 'neutral': 'Neutral'}
+            return {'sentiment': sentiment_map.get(label, 'Neutral'), 'score': round(score, 3)}
+    except Exception:
+        pass
+    return {'sentiment': 'Neutral', 'score': 0.0}
 
 # --- Configuration ---
 st.set_page_config(page_title="3:2:1 Crack Spread Dashboard", layout="wide")
@@ -84,7 +95,13 @@ def fetch_and_score_news() -> pd.DataFrame:
         "energy", "fuel", "petrochemical", "opec"
     ]
     
-    finbert = load_finbert()
+    # Needs to be configured in Streamlit Cloud Secrets Manager -> [huggingface] api_token
+    try:
+        api_token = st.secrets["huggingface"]["api_token"]
+    except Exception:
+        st.error("HuggingFace API token not found! Please configure st.secrets['huggingface']['api_token'].")
+        return pd.DataFrame()
+        
     seen_titles = set()
     rows = []
 
@@ -145,17 +162,10 @@ def fetch_and_score_news() -> pd.DataFrame:
                     
                 seen_titles.add(title)
                 
-                # FinBERT scoring
-                result = finbert(title)[0]
-                label = result['label']
+                # FinBERT API scoring
+                result = score_with_finbert(title, api_token)
+                sentiment = result['sentiment']
                 score = result['score']
-                
-                if label == 'positive':
-                    sentiment = 'Bullish'
-                elif label == 'negative':
-                    sentiment = 'Bearish'
-                else:
-                    sentiment = 'Neutral'
                 
                 rows.append({
                     'Date': date_str,
