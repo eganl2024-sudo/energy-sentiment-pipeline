@@ -6,7 +6,7 @@ import datetime
 import requests
 import time
 
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert/v1/text-classification"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
 
 def score_with_finbert(headline: str, api_token: str) -> dict:
     headers = {"Authorization": f"Bearer {api_token}"}
