@@ -1,87 +1,95 @@
-# Refinery Arbitrage Engine
-
-A live financial analytics platform that models US Gulf Coast refinery economics and tests whether institutional energy commentary predicts margin movements.
-
----
-
-## Overview
-
-The engine computes real-time 3:2:1 crack spreads — the benchmark measure of refinery profitability — by pricing WTI crude inputs against RBOB gasoline and heating oil outputs. It extends this physical margin into net profitability by modeling variable and fixed operating costs, then translates margin shocks into EBITDA and share price impacts for Valero (VLO) using a cycle-aware valuation framework.
-
-A second research layer scrapes and analyzes 87 institutional reports from the U.S. Energy Information Administration (2022–2026), applying VADER sentiment analysis and LDA topic modeling to test a practical question in commodity finance: does public institutional commentary lead or lag the market it describes?
+# Energy Sector NLP Sentiment Pipeline
+### Unstructured Data Analytics | MSBA | University of Notre Dame | Spring 2026
 
 ---
 
 ## Research Question
 
-**Does EIA sentiment Granger-cause crack spread movements?**
+**How can unstructured financial news data be transformed into a quantitative market sentiment signal for the energy sector?**
 
-Bidirectional Granger causality tests at lags of 1–4 weeks found no significant relationship in either direction (all p > 0.05). The result is consistent with semi-strong market efficiency: by the time institutional commentary is published, its signal is already priced. The corpus also spans a structural break — EIA discontinued its long-form *This Week in Petroleum* reports in January 2024, replacing them with shorter *Today in Energy* articles — which introduces a measurable shift in document length and sentiment distribution that itself warrants analysis.
+Financial news headlines are produced continuously and contain real-time market opinion that does not appear in any structured data feed. This project builds a pipeline that ingests raw, unstructured headline text, applies NLP sentiment scoring, and surfaces a quantitative signal alongside structured commodity market data — enabling side-by-side comparison of what the market *says* versus what prices *show*.
 
 ---
 
-## Architecture
+## The Problem with Relying on Prices Alone
 
-| Module | Function |
+Commodity markets like crude oil and refined products are forward-looking. Futures prices reflect consensus expectations, but they lag the narrative. A refinery margin can look healthy on paper while the news flow surrounding major refiners has turned sharply negative — a divergence that structured data alone cannot capture.
+
+This project treats financial news as a primary data source, not an afterthought, and builds the transformation pipeline from raw text to a usable signal.
+
+---
+
+## NLP Pipeline
+
+### Data Source
+Raw headline text is collected via the `yfinance` news API across six major energy sector equities: **VLO, PSX, MPC, XOM, CVX, COP**. These tickers were deliberately chosen because their equity coverage directly reflects refining margin economics — news about these companies is structurally linked to the crack spread environment, not just general market noise.
+
+Futures tickers (`CL=F`, `RB=F`, `HO=F`) were tested for news sourcing and consistently returned empty feeds. Equity tickers proved the reliable proxy for energy sector news volume.
+
+### Text Processing
+Each headline is deduplicated by title string before scoring to prevent the same article from inflating sentiment counts when it appears across multiple ticker feeds.
+
+### Sentiment Scoring: VADER
+Sentiment classification uses **VADER (Valence Aware Dictionary and sEntiment Reasoner)**, a lexicon and rule-based model designed specifically for short-form text. VADER was selected over transformer-based alternatives for three reasons:
+
+1. **Calibration for short text** — Financial headlines average 10–15 words. VADER was built and validated on short-form social and news content, where transformers add complexity without proportionate accuracy gains.
+2. **No training data required** — A domain-trained model would require a labeled dataset of energy finance headlines, which does not exist in a ready-to-use form. VADER provides a principled baseline without that dependency.
+3. **Interpretability** — The compound score (−1.0 to +1.0) is directly interpretable and maps cleanly to a three-class signal.
+
+Each headline receives a compound score classified as:
+
+| Classification | Threshold |
 |---|---|
-| `src/data_pipeline.py` | Market data ingestion via yfinance (CL=F, RB=F, HO=F, NG=F, VLO, PSX) |
-| `src/db.py` | DuckDB database layer — all I/O, table init, and read/write helpers |
-| `src/spread_calculator.py` | 3:2:1 crack spread, net margin, and moving average calculations |
-| `src/signal_generator.py` | Z-score and percentile market signal metrics |
-| `src/correlation_engine.py` | VLO price correlation and rolling OLS regression |
-| `src/valuation_model.py` | EBITDA sensitivity, cyclical EV/EBITDA multiples, run-cut logic |
-| `src/eia_scraper.py` | Hybrid scraper across TWIP archive and Today in Energy (87 reports) |
-| `src/nlp_pipeline.py` | VADER sentiment scoring and sklearn LDA topic modeling (5 topics) |
-| `src/causality_analysis.py` | Bidirectional Granger causality, 4-lag window, rolling correlation |
-| `app/streamlit_app.py` | Two-tab Streamlit dashboard: Market Dashboard and Sentiment & Topics |
+| Bullish | compound ≥ 0.05 |
+| Bearish | compound ≤ −0.05 |
+| Neutral | −0.05 < compound < 0.05 |
+
+### Output Signal
+The pipeline aggregates individual headline scores into portfolio-level summary metrics: average compound score, bullish count, and bearish count across the most recent 15 headlines. This becomes the quantitative sentiment signal displayed alongside live commodity prices.
 
 ---
 
-## Data
+## Structured Context Layer: 3:2:1 Crack Spread
 
-**Market prices:** 5-year daily history for WTI crude, RBOB gasoline, heating oil, natural gas, Valero, and Phillips 66.
+To make the sentiment signal interpretable, the pipeline runs alongside a live crack spread monitor. The **3:2:1 crack spread** is the industry benchmark for US refinery gross margin, representing the profit from processing 3 barrels of crude oil into 2 barrels of gasoline and 1 barrel of distillate.
 
-**Text corpus:** 87 EIA institutional reports spanning January 2022 through February 2026, drawn from two sources:
-- *This Week in Petroleum* weekly reports (2022–2023) — structured long-form analysis, averaging 800–1,400 words
-- *EIA Today in Energy* petroleum articles (2024–2026) — shorter-form successors, averaging 400–800 words
+```
+Crack Spread ($/bbl) = (2 × RBOB_bbl + 1 × HO_bbl − 3 × WTI) / 3
+```
 
----
+RBOB Gasoline and Heating Oil are fetched in $/gallon and converted to $/bbl by multiplying by 42 (gallons per barrel).
 
-## Valuation Model
-
-Two structural upgrades replace the naive linear model with cycle-aware logic:
-
-**Cyclical multiples.** The EV/EBITDA multiple applied to margin shocks adjusts inversely with the spread's Z-score — from 8.5x at trough conditions to 4.5x at peak — reflecting the empirical pattern of multiple compression when earnings are at cycle highs and expansion when they are at lows.
-
-**Economic run-cut floor.** When the scenario spread falls below the $7.50/bbl operating breakeven, throughput is reduced programmatically (20% below breakeven, 40% at zero margin) to emulate real-world margin protection behavior. Bear-case scenarios are materially more adverse than a linear model would suggest.
+This structured layer provides the factual market context against which the unstructured sentiment signal can be evaluated. The combination is the point — neither layer is sufficient alone.
 
 ---
 
-## Limitations
+## Dashboard
 
-- An 87-document corpus is modest for time-series causality work; results should be interpreted directionally rather than conclusively
-- The January 2024 TWIP discontinuation introduces a structural break in document format that may reduce sentiment comparability across the full time series
-- yfinance is a free-tier data source subject to rate limiting and occasional gaps; institutional-grade feeds would improve pipeline reliability
+The application is built in Streamlit and deployed live. All data is fetched in real time on startup with no pre-run pipeline or stored data required.
+
+| Section | Description |
+|---|---|
+| KPI Row | Live crack spread, WTI, RBOB, Heating Oil, and daily change |
+| Crack Spread History | Time-series with 30D and 90D moving average overlays |
+| Component Prices | WTI, RBOB, and Heating Oil history in $/bbl |
+| Recent Daily Data | Last 10 trading days of raw and converted prices |
+| Market Sentiment | VADER-scored headlines with bar chart and sortable table |
+
+**Cache policy:** Futures prices refresh every 5 minutes. News headlines and sentiment scores refresh every 30 minutes.
 
 ---
 
-## How to Run
+## How to Run Locally
 
 ```bash
 # 1. Create and activate a Python 3.11 virtual environment
 py -3.11 -m venv venv
 venv\Scripts\activate
 
-# 2. Install pinned dependencies
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run the pipeline in sequence
-python src/data_pipeline.py
-python src/eia_scraper.py
-python src/nlp_pipeline.py
-python src/causality_analysis.py
-
-# 4. Launch the dashboard
+# 3. Launch
 streamlit run app/streamlit_app.py
 ```
 
@@ -89,4 +97,14 @@ streamlit run app/streamlit_app.py
 
 ## Tech Stack
 
-Python 3.11 · DuckDB · Streamlit · yfinance · VADER · scikit-learn · statsmodels · BeautifulSoup4 · Plotly
+Python 3.11 · Streamlit · yfinance · VADER · Plotly · Pandas
+
+---
+
+## Limitations and Future Work
+
+**VADER is a general-purpose tool.** It was not trained on commodity finance language. Domain-specific terms like "crack spread compression" or "turnaround season" carry no weight in its lexicon. A fine-tuned model such as FinBERT, trained on financial news, would improve scoring precision on energy-specific language and represents the natural next iteration of this pipeline.
+
+**Headline volume is bounded by yfinance availability.** Typically 10–20 articles per refresh cycle. A production pipeline would aggregate from multiple news APIs to increase signal volume and reduce dependence on a single source.
+
+**Sentiment without causality.** This pipeline produces a contemporaneous signal — it does not establish whether sentiment leads or lags price movements. A lagged correlation analysis between the daily aggregate sentiment score and next-day crack spread changes would be the appropriate next analytical step.

@@ -1,318 +1,329 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import yfinance as yf
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import sys
-import os
+import datetime
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# --- PATH SETUP ---
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# --- Configuration ---
+st.set_page_config(page_title="3:2:1 Crack Spread Dashboard", layout="wide")
 
-# --- MODULE IMPORTS ---
-try:
-    from src.config import VLO_DEFAULTS, MARKET_EVENTS
-    from src.signal_generator import calculate_signal_metrics
-    from src.valuation_model import calculate_ebitda_impact, calculate_share_price_impact
-    from src.correlation_engine import calculate_correlations
-    from src.report_generator import generate_executive_summary
-    from src.db import read_processed, read_table
-except ImportError as e:
-    st.error(f"❌ Module Import Failed: {e}. Ensure you are running from the project root.")
-    st.stop()
+# --- Constants ---
+# Tickers for Yahoo Finance
+TICKERS = {
+    'WTI': 'CL=F',   # Crude Oil
+    'RBOB': 'RB=F',  # Gasoline (in $/gallon)
+    'HO': 'HO=F'     # Heating Oil (in $/gallon)
+}
+GAL_TO_BBL = 42.0
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Refinery Arbitrage Engine", page_icon="🛢️", layout="wide")
+# --- Helper Functions ---
+@st.cache_data(ttl=300)
+def fetch_data(lookback_days: int) -> pd.DataFrame:
+    """Fetches live WTI (CL=F), RBOB Gasoline (RB=F), and Heating Oil (HO=F) prices using yfinance"""
+    end_date = datetime.date.today() + datetime.timedelta(days=1)
+    start_date = end_date - datetime.timedelta(days=lookback_days + 150) # Buffer for 90D MA
+    
+    # Download data for all tickers
+    data = yf.download(list(TICKERS.values()), start=start_date, end=end_date, progress=False)
+    
+    # If the returned dataframe has a MultiIndex on columns (like when using yf.download for multiple tickers)
+    if isinstance(data.columns, pd.MultiIndex):
+        if 'Close' in data.columns.levels[0]:
+            df = data['Close'].copy()
+        # Fallback for newer yfinance which might return 'Price' level
+        elif 'Adj Close' in data.columns.levels[0]:
+            df = data['Adj Close'].copy()
+        else:
+             df = data.copy()
+             df.columns = df.columns.droplevel(0)
+    else:
+        df = data.copy()
 
-# --- CSS STYLING ---
-st.markdown("""
-<style>
-    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-    .stAlert { padding: 10px; }
-</style>
-""", unsafe_allow_html=True)
+    # Map columns to our internal names
+    rename_map = {v: k for k, v in TICKERS.items()}
+    df.rename(columns=rename_map, inplace=True)
+    df = df.dropna()
 
-# --- DATA LOADING ---
-@st.cache_data
-def load_data():
-    df = read_processed()
-    if df.empty:
-        st.error("❌ Data file not found. Please run the data pipeline first.")
-        return pd.DataFrame()
+    # Convert RBOB and Heating Oil to $/bbl
+    df['RBOB_bbl'] = df['RBOB'] * GAL_TO_BBL
+    df['HO_bbl'] = df['HO'] * GAL_TO_BBL
+    df['WTI_bbl'] = df['WTI']
+    
+    # Calculate 3:2:1 Crack Spread
+    df['Crack_Spread'] = (2 * df['RBOB_bbl'] + 1 * df['HO_bbl'] - 3 * df['WTI_bbl']) / 3
+    
+    # Moving Averages
+    df['Crack_Spread_30MA'] = df['Crack_Spread'].rolling(window=30).mean()
+    df['Crack_Spread_90MA'] = df['Crack_Spread'].rolling(window=90).mean()
+    
     return df
 
-df = load_data()
-if df.empty: st.stop()
-
-# --- SIDEBAR CONFIGURATION ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
+@st.cache_data(ttl=1800)
+def fetch_and_score_news() -> pd.DataFrame:
+    """
+    Fetches recent energy sector headlines from major refining/oil companies
+    and scores them with VADER sentiment. Uses equity tickers which reliably
+    return news via yfinance, rather than futures tickers which often return nothing.
+    """
+    # Energy sector tickers that reliably return news and are 
+    # directly tied to refining margins and crack spreads
+    NEWS_TICKERS = ["VLO", "PSX", "MPC", "XOM", "CVX", "COP"]
     
-    # 1. Date Range
-    timeframe = st.selectbox("Lookback Period", ["1 Year", "3 Years", "5 Years", "All Time"], index=2)
-    end_date = df.index.max()
-    
-    # Auto-Sync Logic: Map Timeframe to Signal Window defaults
-    signal_map_defaults = {
-        "1 Year": 1,   # Default to 90 Days
-        "3 Years": 2,  # Default to 1 Year
-        "5 Years": 3,  # Default to All Time
-        "All Time": 3
-    }
-    default_signal_index = signal_map_defaults.get(timeframe, 2)
+    sia = SentimentIntensityAnalyzer()
+    seen_titles = set()
+    rows = []
 
-    if timeframe == "1 Year": start_date = end_date - timedelta(days=365)
-    elif timeframe == "3 Years": start_date = end_date - timedelta(days=365*3)
-    elif timeframe == "5 Years": start_date = end_date - timedelta(days=365*5)
-    else: start_date = df.index.min()
-        
-    filtered_df = df.loc[start_date:end_date]
-    
-    st.divider()
-    
-    # 2. Signal Settings
-    st.subheader("🎯 Signal Settings")
-    signal_window = st.selectbox(
-        "Signal Calculation Period",
-        ["30 Days", "90 Days", "1 Year", "All Time"],
-        index=default_signal_index, # <--- Auto-syncs with Timeframe
-        help="Time period for Z-score and percentile calculations"
-    )
-    window_map = {"30 Days": 30, "90 Days": 90, "1 Year": 252, "All Time": None}
-    signal_days = window_map[signal_window]
-    
-    st.divider()
-    
-    # 3. Valuation Inputs
-    st.header("💰 Valuation Model")
-    st.info("Simulate a shock to the 3:2:1 Crack Spread.")
-    
-    throughput = st.number_input("Throughput (bpd)", value=VLO_DEFAULTS['throughput_bpd'], step=100_000)
-    capture_rate = st.slider("Capture Rate (%)", 70, 100, int(VLO_DEFAULTS['capture_rate']*100)) / 100
-    shares = st.number_input("Shares (M)", value=VLO_DEFAULTS['shares_outstanding']/1_000_000, step=5.0) * 1_000_000
-    
-    st.markdown("---")
-    
-    # Scenario Slider
-    latest = df.iloc[-1]
-    current_spread_val = latest['Crack_Spread']
-    default_scenario = float(current_spread_val) + 5.0
-    
-    shock_spread = st.slider(
-        "Scenario Spread ($/bbl)", 
-        0.0, 60.0, 
-        default_scenario,
-        help="Adjust to see impact of margin compression/expansion"
-    )
-    
-    # Presets
-    c1, c2, c3 = st.columns(3)
-    if c1.button("📉 Bear"): shock_spread = current_spread_val - 10
-    if c2.button("📊 Base"): shock_spread = current_spread_val
-    if c3.button("📈 Bull"): shock_spread = current_spread_val + 10
-
-# --- MAIN DASHBOARD ---
-st.title("🛢️ Refinery Arbitrage Engine")
-st.markdown("**Objective:** Quantify the theoretical margins (Gross & Net) of US Gulf Coast refineries.")
-
-# --- TABS SETUP ---
-tabs = st.tabs(["📊 Market Dashboard", "📰 Sentiment & Topics"])
-
-with tabs[0]:
-    # --- EXECUTIVE SUMMARY ---
-    st.markdown("### 📝 Executive Briefing")
-    summary_text = generate_executive_summary(filtered_df)
-    st.info(summary_text)
-
-    st.divider()
-
-    # 1. KPI ROW
-    latest = df.iloc[-1]
-    ma_30 = latest['Spread_30D_MA']
-    delta_vs_ma = latest['Crack_Spread'] - ma_30
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-
-    with c1:
-        st.metric("Gross Margin (3:2:1)", f"${latest['Crack_Spread']:.2f}", f"{delta_vs_ma:+.2f} vs 30D MA", help="Current spread relative to 30-day moving average")
-
-    with c2:
-        if 'Net_Refining_Margin' in df.columns:
-            net_val = latest['Net_Refining_Margin']
-            net_ma_30 = latest['Net_Margin_30D_MA']
-            net_delta = net_val - net_ma_30
-            st.metric("Net Margin (After OpEx)", f"${net_val:.2f}", f"{net_delta:+.2f} vs 30D MA")
-        else:
-            st.metric("Net Margin", "N/A", "Run Phase 7")
-
-    with c3:
-        # Crude: Inverse Color (Lower is Green/Good for Refiners)
-        prev = df.iloc[-2]
-        st.metric("WTI Crude", f"${latest['Crude_Oil']:.2f}", f"{latest['Crude_Oil']-prev['Crude_Oil']:.2f}", delta_color="inverse")
-
-    with c4:
-        st.metric("Valero (VLO)", f"${latest['Valero']:.2f}", f"{latest['Valero']-prev['Valero']:.2f}")
-
-    with c5:
-        # UPDATED: Shows Z-Score AND Percentile
-        metrics = calculate_signal_metrics(df['Crack_Spread'], window=signal_days)
-        st.metric("Market Signal", metrics['signal'], f"Z: {metrics['z_score']:.2f}σ | Pctl: {metrics['percentile']:.0f}%", help="Z-score vs. percentile: -1σ ≈ 16th %ile, 0σ = 50th %ile, +1σ ≈ 84th %ile")
-
-    # 2. CHARTS & TRENDS
-    st.subheader("📈 Margin Trends (Gross vs Net)")
-    fig = go.Figure()
-
-    # Gross Trace
-    fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Crack_Spread'], mode='lines', name='Gross Margin (3:2:1)', line=dict(color='#1f77b4', width=2)))
-
-    # Net Trace
-    if 'Net_Refining_Margin' in filtered_df.columns:
-        fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Net_Refining_Margin'], mode='lines', name='Net Margin (Realized)', line=dict(color='#2ca02c', width=2), fill='tonexty', fillcolor='rgba(44, 160, 44, 0.1)'))
-
-    # 30D MA Trace
-    fig.add_trace(go.Scatter(x=filtered_df.index, y=filtered_df['Spread_30D_MA'], mode='lines', name='30D Avg (Gross)', line=dict(color='#ff7f0e', width=1, dash='dot')))
-
-    # Annotations
-    events_visible = False
-    for date, label in MARKET_EVENTS:
-        date_obj = pd.to_datetime(date)
-        if start_date <= date_obj <= end_date:
-            fig.add_vline(x=date, line_dash="dash", line_color="gray")
-            fig.add_annotation(x=date, y=filtered_df['Crack_Spread'].max(), text=label)
-            events_visible = True
-
-    fig.update_layout(height=500, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0.5, xanchor='center'))
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("""**OpEx Assumptions:** Variable cost based on Natural Gas (NG=F) × 0.45 MMBtu/bbl. Fixed cost ($6/bbl) represents labor, maintenance, and catalyst expenses. *Industry range: $4-8/bbl.*""")
-
-    if not events_visible:
-        st.caption("ℹ️ No major market events in selected timeframe. Try '5 Years' to see historical catalysts.")
-
-    # 3. CORRELATION ENGINE
-    st.divider()
-    st.subheader("🔗 Market Intelligence")
-
-    @st.cache_data
-    def get_correlations(df):
-        return calculate_correlations(df, 'Crack_Spread', 'Valero')
-
-    corr, r2, rolling = get_correlations(filtered_df)
-
-    # UPDATED: Methodology Expander
-    with st.expander("🔬 Correlation Methodology: Levels vs. Returns", expanded=False):
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write("**Method 1: Price Levels**")
-            st.caption("Correlates $22 spread vs. $183 stock price.")
-            st.metric("Correlation (Levels)", f"{corr:.2f}")
-        with col_b:
-            st.write("**Method 2: % Returns**")
-            st.caption("Correlates daily % change in spread vs VLO.")
-            
-            @st.cache_data
-            def get_corr_returns(df):
-                from src.spread_calculator import compute_correlation_returns
-                return compute_correlation_returns(df, 'Crack_Spread', 'Valero')
-                
-            corr_returns = get_corr_returns(filtered_df)
-            st.metric("Correlation (Returns)", f"{corr_returns:.2f}")
-        
-        st.info("**Analysis:** Stock prices trend up over time (earnings/buybacks) while spreads are cyclical. If 'Returns' correlation is higher, VLO reacts to daily spread changes, even if the long-term price trend is decoupled.")
-
-    # Correlation Context Warning
-    if abs(corr) > 0.7:
-        corr_context = "🟢 Strong fundamental link"
-    elif abs(corr) > 0.4:
-        corr_context = "🟡 Moderate link (mixed drivers)"
-    else:
-        corr_context = "🔴 Decoupled (sentiment/policy driven)"
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Correlation (Levels)", f"{corr:.2f}", help="Pearson Coefficient")
-    c2.metric("R-Squared", f"{r2:.2f}", help="Explained Variance")
-    c3.metric("Link Strength", "Strong" if abs(corr)>0.7 else "Weak", help=corr_context)
-
-    if abs(corr) < 0.3 and abs(corr_returns) < 0.3:
-        st.warning(f"⚠️ Weak correlation detected in both Levels ({corr:.2f}) and Returns ({corr_returns:.2f}). VLO is likely trading on macro sentiment, buybacks, or forward earnings expectations rather than current spot margins.")
-
-    t1, t2 = st.tabs(["Regime Analysis", "Fair Value Regression"])
-    with t1:
-        st.plotly_chart(px.line(rolling, title="Rolling Correlation"), use_container_width=True)
-    with t2:
+    for symbol in NEWS_TICKERS:
         try:
-            st.plotly_chart(px.scatter(filtered_df, x='Crack_Spread', y='Valero', trendline='ols', title="Fair Value Model"), use_container_width=True)
-        except:
-            st.warning("Install statsmodels for trendlines.")
+            t = yf.Ticker(symbol)
+            news_list = t.news or []
+            for item in news_list:
+                # yfinance >=0.2.40 nests content inside a 'content' dict
+                # Fall back gracefully if the old flat structure is used
+                content = item.get('content', item)
+                
+                title = (
+                    content.get('title') or
+                    item.get('title') or
+                    ''
+                ).strip()
+                
+                link = (
+                    content.get('canonicalUrl', {}).get('url') or
+                    content.get('clickThroughUrl', {}).get('url') or
+                    item.get('link') or
+                    ''
+                ).strip()
+                
+                publisher = (
+                    content.get('provider', {}).get('displayName') or
+                    item.get('publisher') or
+                    ''
+                ).strip()
+                
+                # Timestamp: try multiple locations
+                pub_time = (
+                    content.get('pubDate') or
+                    item.get('providerPublishTime') or
+                    0
+                )
+                
+                # Parse timestamp — could be unix int or ISO string
+                try:
+                    if isinstance(pub_time, str):
+                        date_str = pd.to_datetime(pub_time).strftime('%Y-%m-%d')
+                    elif isinstance(pub_time, (int, float)) and pub_time > 0:
+                        date_str = pd.to_datetime(pub_time, unit='s').strftime('%Y-%m-%d')
+                    else:
+                        date_str = datetime.date.today().strftime('%Y-%m-%d')
+                except Exception:
+                    date_str = datetime.date.today().strftime('%Y-%m-%d')
+                
+                # Skip empty titles and duplicates
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                
+                # VADER scoring
+                scores = sia.polarity_scores(title)
+                compound = scores['compound']
+                
+                if compound >= 0.05:
+                    sentiment = 'Bullish'
+                elif compound <= -0.05:
+                    sentiment = 'Bearish'
+                else:
+                    sentiment = 'Neutral'
+                
+                rows.append({
+                    'Date': date_str,
+                    'title': title,
+                    'link': link,
+                    'publisher': publisher,
+                    'Sentiment': sentiment,
+                    'Score': compound,
+                })
+        except Exception:
+            continue
 
-    # 4. VALUATION SENSITIVITY
-    st.divider()
-    st.subheader("⚡ Valuation Sensitivity")
-    impact = calculate_ebitda_impact(throughput, capture_rate, current_spread_val, shock_spread)
-    price_delta, _ = calculate_share_price_impact(VLO_DEFAULTS['current_ebitda'], impact, VLO_DEFAULTS['ev_ebitda_multiple'], shares)
+    if not rows:
+        return pd.DataFrame()
 
+    df = pd.DataFrame(rows)
+    df = df.sort_values('Date', ascending=False).head(15).reset_index(drop=True)
+    return df
+
+# --- Sidebar ---
+st.sidebar.title("Configuration")
+
+# Lookback Mapping
+LOOKBACK_OPTIONS = {
+    "1 Month": 30,
+    "3 Months": 90,
+    "6 Months": 180,
+    "1 Year": 365,
+    "2 Years": 730
+}
+selected_lookback = st.sidebar.selectbox("Lookback Period", list(LOOKBACK_OPTIONS.keys()), index=3) # Default 1 Year
+lookback_days = LOOKBACK_OPTIONS[selected_lookback]
+
+st.sidebar.markdown("### 3:2:1 Crack Spread Formula")
+st.sidebar.latex(r'''Crack\ Spread = \frac{2 \times RBOB_{bbl} + 1 \times HO_{bbl} - 3 \times WTI}{3}''')
+st.sidebar.markdown("*Note: RBOB and HO are converted from \$/gallon to \$/bbl by multiplying by 42.*")
+
+
+# --- Main Logic ---
+st.title("3:2:1 Crack Spread Dashboard")
+
+with st.spinner("Fetching live data from Yahoo Finance..."):
+    df_full = fetch_data(lookback_days)
+
+if df_full.empty:
+    st.error("Error fetching data. Please try again later.")
+    st.stop()
+
+# Filter context for the selected period
+df_view = df_full.tail(lookback_days).copy()
+
+if df_view.empty:
+    st.error("No data available for the selected period.")
+    st.stop()
+
+# Get latest values for KPIs
+latest = df_view.iloc[-1]
+crack_spread_val = latest['Crack_Spread']
+wti_val = latest['WTI_bbl']
+rbob_bbl_val = latest['RBOB_bbl']
+ho_bbl_val = latest['HO_bbl']
+cs_30ma = latest['Crack_Spread_30MA']
+
+val_30d_ago = df_full['Crack_Spread'].iloc[-22] if len(df_full) >= 22 else df_full['Crack_Spread'].iloc[0]
+cs_1m_change = crack_spread_val - val_30d_ago
+
+# --- KPI Section ---
+st.subheader("Key Performance Indicators (Latest)")
+col1, col2, col3, col4, col5 = st.columns(5)
+col1.metric("Crack Spread", f"${crack_spread_val:.2f}", f"{crack_spread_val - df_view['Crack_Spread'].iloc[-2]:.2f} (Daily)")
+col2.metric("WTI ($/bbl)", f"${wti_val:.2f}", f"{wti_val - df_view['WTI_bbl'].iloc[-2]:.2f}")
+col3.metric("RBOB ($/bbl)", f"${rbob_bbl_val:.2f}", f"{rbob_bbl_val - df_view['RBOB_bbl'].iloc[-2]:.2f}")
+col4.metric("Heating Oil", f"${ho_bbl_val:.2f}", f"{ho_bbl_val - df_view['HO_bbl'].iloc[-2]:.2f}")
+col5.metric("CS vs 30D MA", f"${crack_spread_val - cs_30ma:.2f}", delta_color="normal")
+
+
+# --- Charts Section ---
+st.subheader("Crack Spread Analysis")
+
+# Chart 1: Crack Spread with MAs and shaded fill
+fig_cs = go.Figure()
+
+fig_cs.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['Crack_Spread'],
+    mode='lines', name='Crack Spread',
+    line=dict(color='royalblue', width=2),
+    fill='tozeroy', fillcolor='rgba(65, 105, 225, 0.1)'
+))
+fig_cs.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['Crack_Spread_30MA'],
+    mode='lines', name='30-Day MA',
+    line=dict(color='orange', width=2, dash='dash')
+))
+fig_cs.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['Crack_Spread_90MA'],
+    mode='lines', name='90-Day MA',
+    line=dict(color='red', width=2, dash='dot')
+))
+
+fig_cs.update_layout(title="Crack Spread History", xaxis_title="Date", yaxis_title="Crack Spread ($/bbl)", template="plotly_white", margin=dict(l=0, r=0, t=40, b=0))
+
+st.plotly_chart(fig_cs, use_container_width=True)
+
+# Chart 2: Component Prices
+st.subheader("Component Prices")
+fig_comp = go.Figure()
+
+fig_comp.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['WTI_bbl'],
+    mode='lines', name='WTI ($/bbl)', line=dict(color='black')
+))
+fig_comp.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['RBOB_bbl'],
+    mode='lines', name='RBOB ($/bbl)', line=dict(color='green')
+))
+fig_comp.add_trace(go.Scatter(
+    x=df_view.index, y=df_view['HO_bbl'],
+    mode='lines', name='Heating Oil ($/bbl)', line=dict(color='darkred')
+))
+
+fig_comp.update_layout(title="Component Price History ($/bbl)", xaxis_title="Date", yaxis_title="Price ($/bbl)", template="plotly_white", margin=dict(l=0, r=0, t=40, b=0))
+
+st.plotly_chart(fig_comp, use_container_width=True)
+
+# --- Data Table Section ---
+st.subheader("Recent Daily Data")
+st.markdown("Most recent 10 trading days.")
+
+display_df = df_full[['WTI', 'RBOB', 'HO', 'WTI_bbl', 'RBOB_bbl', 'HO_bbl', 'Crack_Spread']].copy()
+display_df = display_df.sort_index(ascending=False).head(10)
+display_df.index = display_df.index.strftime('%Y-%m-%d')
+st.dataframe(display_df.style.format("{:.2f}"))
+
+st.divider()
+
+# --- Market Sentiment Section ---
+st.subheader("📰 Market Sentiment — News Headlines")
+
+with st.spinner("Fetching and scoring recent headlines..."):
+    df_news = fetch_and_score_news()
+
+if df_news.empty:
+    st.info("No recent news headlines available.")
+else:
+    avg_score = df_news['Score'].mean()
+    bullish_count = len(df_news[df_news['Sentiment'] == 'Bullish'])
+    bearish_count = len(df_news[df_news['Sentiment'] == 'Bearish'])
+    
     c1, c2, c3 = st.columns(3)
-    c1.metric("Scenario Spread", f"${shock_spread:.2f}", f"{shock_spread-current_spread_val:.2f} Delta", delta_color="off")
-    c2.metric("EBITDA Impact", f"${impact/1e6:,.0f} M", "Annualized", delta_color="inverse" if impact > 0 else "normal")
-    c3.metric("Share Price Impact", f"${price_delta:+.2f}", f"at {VLO_DEFAULTS['ev_ebitda_multiple']}x EV/EBITDA", delta_color="inverse" if impact > 0 else "normal")
-
-with tabs[1]:
-    st.header("📰 EIA Sentiment Analysis")
+    c1.metric("Avg Headline Sentiment", f"{avg_score:.2f}")
+    c2.metric("Bullish Headlines", bullish_count)
+    c3.metric("Bearish Headlines", bearish_count)
     
-    @st.cache_data
-    def load_sentiment_data():
-        df_merged = read_table('sentiment_spread_merged')
-        df_merged['report_date'] = pd.to_datetime(df_merged['report_date'])
-        df_merged.set_index('report_date', inplace=True)
-        
-        df_roll = read_table('sentiment_spread_rolling_corr')
-        df_roll['date'] = pd.to_datetime(df_roll['date'])
-        
-        df_sent = read_table('eia_sentiment')
-        return df_merged, df_roll, df_sent
-        
-    df_merged, df_roll, df_sent = load_sentiment_data()
+    # Plotly Bar Chart
+    df_plot = df_news.copy()
+    # Truncate title for chart
+    df_plot['short_title'] = df_plot['title'].apply(lambda x: x[:60] + "..." if len(x) > 60 else x)
+    df_plot = df_plot.sort_values(by='Score', ascending=True)
     
-    if df_sent.empty or df_merged.empty:
-        st.warning("No sentiment data available. Please run the NLP pipeline.")
-    else:
-        latest_sent = df_sent.iloc[-1]
-        last_4_avg = df_sent['compound'].tail(4).mean()
-        total_reports = len(df_sent)
-        
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Latest Sentiment Score", f"{latest_sent['compound']:.2f}")
-        m2.metric("4-Week Avg Sentiment", f"{last_4_avg:.2f}")
-        m3.metric("Total Reports Analyzed", f"{total_reports}")
-        m4.metric("Granger Causality", "Not Significant", "p>0.05 all lags", delta_color="off")
-        
-        st.divider()
-        st.subheader("Sentiment vs. Crack Spread")
-        from plotly.subplots import make_subplots
-        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
-        fig2.add_trace(go.Scatter(x=df_merged.index, y=df_merged['compound'], name="Sentiment (Compound)", line=dict(color='#1f77b4')), secondary_y=False)
-        fig2.add_trace(go.Scatter(x=df_merged.index, y=df_merged['Crack_Spread'], name="Crack Spread ($/bbl)", line=dict(color='#ff7f0e')), secondary_y=True)
-        fig2.update_layout(title="EIA Sentiment vs. 3:2:1 Crack Spread", hovermode="x unified", legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'))
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        st.divider()
-        st.subheader("Sentiment Correlation")
-        fig3 = px.line(df_roll, x='date', y='rolling_corr', title="Rolling 90-Day Sentiment-Spread Correlation")
-        fig3.add_hline(y=0, line_dash="dash", line_color="gray")
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        st.divider()
-        st.subheader("Topic Extractor")
-        topic_summary = df_sent.groupby('dominant_topic').agg(
-            Avg_Sentiment=('compound', 'mean'),
-            Report_Count=('compound', 'count')
-        ).reset_index()
-        topic_summary.rename(columns={'dominant_topic': 'Topic', 'Avg_Sentiment': 'Avg Sentiment', 'Report_Count': 'Report Count'}, inplace=True)
-        st.dataframe(topic_summary, use_container_width=True)
-        st.caption("LDA Topic Modeling — 5 topics extracted via sklearn")
-        
-        with st.expander("🔬 About This Analysis"):
-            st.markdown(f"**Methodology:** {total_reports} EIA reports scraped (2022-2025). "
-                        "Reports were scored using VADER for sentiment polarity and processed using scikit-learn's LatentDirichletAllocation (LDA) to extract 5 topics. "
-                        "Granger causality was tested on the merged dataset at lags of 1-4 weeks between sentiment and crack spreads, which found no significant predictive relationship (p > 0.05) - "
-                        "an outcome consistent with semi-strong market efficiency where public EIA data is instantly priced into front-month futures.")
+    color_map = {'Bullish': 'green', 'Bearish': 'red', 'Neutral': 'gray'}
+    colors = df_plot['Sentiment'].map(color_map).tolist()
+    
+    fig_sent = go.Figure(go.Bar(
+        x=df_plot['Score'],
+        y=df_plot['short_title'],
+        orientation='h',
+        marker_color=colors,
+    ))
+    fig_sent.add_vline(x=0, line_dash="dash", line_color="black")
+    fig_sent.update_layout(
+        title="Headline Sentiment Scores",
+        height=650,
+        xaxis_title="Compound Score",
+        yaxis_title="",
+        yaxis=dict(automargin=True, tickfont=dict(size=11)),
+        template="plotly_white",
+        margin=dict(l=300, r=40, t=40, b=40)
+    )
+    st.plotly_chart(fig_sent, use_container_width=True)
+    
+    # Dataframe Table
+    st.markdown("### Recent News")
+    df_table = df_news.copy()
+    df_table['Headline'] = "[" + df_table['title'] + "](" + df_table['link'].fillna("") + ")"
+    df_table = df_table[['Date', 'Headline', 'publisher', 'Sentiment', 'Score']]
+    df_table = df_table.rename(columns={'publisher': 'Publisher'})
+    
+    # Format Score to 2 decimal places
+    df_table['Score'] = df_table['Score'].apply(lambda x: f"{x:.2f}")
+    
+    # Render as HTML to support clickable links
+    st.write(df_table.to_html(escape=False, index=False), unsafe_allow_html=True)
