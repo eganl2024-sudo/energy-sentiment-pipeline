@@ -3,4 +3,5 @@ pandas
 plotly
 yfinance
 numpy
-vaderSentiment
+transformers==4.40.0
+torch==2.3.0

@@ -29,23 +29,22 @@ Futures tickers (`CL=F`, `RB=F`, `HO=F`) were tested for news sourcing and consi
 ### Text Processing
 Each headline is deduplicated by title string before scoring to prevent the same article from inflating sentiment counts when it appears across multiple ticker feeds.
 
-### Sentiment Scoring: VADER
-Sentiment classification uses **VADER (Valence Aware Dictionary and sEntiment Reasoner)**, a lexicon and rule-based model designed specifically for short-form text. VADER was selected over transformer-based alternatives for three reasons:
+### Keyword Pre-Filter
+Before scoring, headlines are checked against an energy-specific keyword filter. Any headline failing to match at least one keyword is discarded. This eliminates general market noise from the text pipeline.
 
-1. **Calibration for short text** — Financial headlines average 10–15 words. VADER was built and validated on short-form social and news content, where transformers add complexity without proportionate accuracy gains.
-2. **No training data required** — A domain-trained model would require a labeled dataset of energy finance headlines, which does not exist in a ready-to-use form. VADER provides a principled baseline without that dependency.
-3. **Interpretability** — The compound score (−1.0 to +1.0) is directly interpretable and maps cleanly to a three-class signal.
+### Sentiment Scoring: FinBERT
+Sentiment classification uses **FinBERT**, a Transformer model pre-trained on financial news (10,000 sentences from Financial PhraseBank). It produces domain-aware sentiment classification with a confidence score (0.0 to 1.0) rather than a simple word-based valence score.
 
-Each headline receives a compound score classified as:
+Each headline receives a sentiment label from FinBERT mapped to our signal:
 
-| Classification | Threshold |
+| FinBERT Label | Signal Classification |
 |---|---|
-| Bullish | compound ≥ 0.05 |
-| Bearish | compound ≤ −0.05 |
-| Neutral | −0.05 < compound < 0.05 |
+| positive | Bullish |
+| negative | Bearish |
+| neutral | Neutral |
 
 ### Output Signal
-The pipeline aggregates individual headline scores into portfolio-level summary metrics: average compound score, bullish count, and bearish count across the most recent 15 headlines. This becomes the quantitative sentiment signal displayed alongside live commodity prices.
+The pipeline aggregates individual headline scores into portfolio-level summary metrics: average confidence score, bullish count, and bearish count across the most recent 15 headlines. This becomes the quantitative sentiment signal displayed alongside live commodity prices.
 
 ---
 
@@ -73,7 +72,7 @@ The application is built in Streamlit and deployed live. All data is fetched in 
 | Crack Spread History | Time-series with 30D and 90D moving average overlays |
 | Component Prices | WTI, RBOB, and Heating Oil history in $/bbl |
 | Recent Daily Data | Last 10 trading days of raw and converted prices |
-| Market Sentiment | VADER-scored headlines with bar chart and sortable table |
+| Market Sentiment | FinBERT-scored headlines with bar chart and sortable table |
 
 **Cache policy:** Futures prices refresh every 5 minutes. News headlines and sentiment scores refresh every 30 minutes.
 
@@ -97,13 +96,11 @@ streamlit run app/streamlit_app.py
 
 ## Tech Stack
 
-Python 3.11 · Streamlit · yfinance · VADER · Plotly · Pandas
+Python 3.11 · Streamlit · yfinance · FinBERT · Transformers · Plotly · Pandas
 
 ---
 
 ## Limitations and Future Work
-
-**VADER is a general-purpose tool.** It was not trained on commodity finance language. Domain-specific terms like "crack spread compression" or "turnaround season" carry no weight in its lexicon. A fine-tuned model such as FinBERT, trained on financial news, would improve scoring precision on energy-specific language and represents the natural next iteration of this pipeline.
 
 **Headline volume is bounded by yfinance availability.** Typically 10–20 articles per refresh cycle. A production pipeline would aggregate from multiple news APIs to increase signal volume and reduce dependence on a single source.
 

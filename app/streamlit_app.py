@@ -3,7 +3,15 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import datetime
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from transformers import pipeline
+
+@st.cache_resource
+def load_finbert():
+    return pipeline(
+        "text-classification",
+        model="ProsusAI/finbert",
+        tokenizer="ProsusAI/finbert"
+    )
 
 # --- Configuration ---
 st.set_page_config(page_title="3:2:1 Crack Spread Dashboard", layout="wide")
@@ -70,7 +78,13 @@ def fetch_and_score_news() -> pd.DataFrame:
     # directly tied to refining margins and crack spreads
     NEWS_TICKERS = ["VLO", "PSX", "MPC", "XOM", "CVX", "COP"]
     
-    sia = SentimentIntensityAnalyzer()
+    ENERGY_KEYWORDS = [
+        "crude", "oil", "refin", "gasoline", "diesel", "distillate", "barrel", "crack", 
+        "wti", "brent", "upstream", "downstream", "margin", "lng", "natural gas", "pipeline", 
+        "energy", "fuel", "petrochemical", "opec"
+    ]
+    
+    finbert = load_finbert()
     seen_titles = set()
     rows = []
 
@@ -123,15 +137,22 @@ def fetch_and_score_news() -> pd.DataFrame:
                 # Skip empty titles and duplicates
                 if not title or title in seen_titles:
                     continue
+                    
+                # Keyword pre-filter
+                title_lower = title.lower()
+                if not any(kw in title_lower for kw in ENERGY_KEYWORDS):
+                    continue
+                    
                 seen_titles.add(title)
                 
-                # VADER scoring
-                scores = sia.polarity_scores(title)
-                compound = scores['compound']
+                # FinBERT scoring
+                result = finbert(title)[0]
+                label = result['label']
+                score = result['score']
                 
-                if compound >= 0.05:
+                if label == 'positive':
                     sentiment = 'Bullish'
-                elif compound <= -0.05:
+                elif label == 'negative':
                     sentiment = 'Bearish'
                 else:
                     sentiment = 'Neutral'
@@ -142,7 +163,7 @@ def fetch_and_score_news() -> pd.DataFrame:
                     'link': link,
                     'publisher': publisher,
                     'Sentiment': sentiment,
-                    'Score': compound,
+                    'Score': score,
                 })
         except Exception:
             continue
