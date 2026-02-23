@@ -43,40 +43,48 @@ def fetch_data(lookback_days: int) -> pd.DataFrame:
     end_date = datetime.date.today() + datetime.timedelta(days=1)
     start_date = end_date - datetime.timedelta(days=lookback_days + 150) # Buffer for 90D MA
     
-    # Download data for all tickers
-    data = yf.download(list(TICKERS.values()), start=start_date, end=end_date, progress=False)
-    
-    # If the returned dataframe has a MultiIndex on columns (like when using yf.download for multiple tickers)
-    if isinstance(data.columns, pd.MultiIndex):
-        if 'Close' in data.columns.levels[0]:
-            df = data['Close'].copy()
-        # Fallback for newer yfinance which might return 'Price' level
-        elif 'Adj Close' in data.columns.levels[0]:
-            df = data['Adj Close'].copy()
+    try:
+        # Download data for all tickers
+        data = yf.download(list(TICKERS.values()), start=start_date, end=end_date, progress=False)
+        
+        if data.empty:
+            st.warning("Yahoo Finance returned an empty dataset.")
+            return pd.DataFrame()
+            
+        # If the returned dataframe has a MultiIndex on columns (like when using yf.download for multiple tickers)
+        if isinstance(data.columns, pd.MultiIndex):
+            if 'Close' in data.columns.levels[0]:
+                df = data['Close'].copy()
+            # Fallback for newer yfinance which might return 'Price' level
+            elif 'Adj Close' in data.columns.levels[0]:
+                df = data['Adj Close'].copy()
+            else:
+                 df = data.copy()
+                 df.columns = df.columns.droplevel(0)
         else:
-             df = data.copy()
-             df.columns = df.columns.droplevel(0)
-    else:
-        df = data.copy()
-
-    # Map columns to our internal names
-    rename_map = {v: k for k, v in TICKERS.items()}
-    df.rename(columns=rename_map, inplace=True)
-    df = df.dropna()
-
-    # Convert RBOB and Heating Oil to $/bbl
-    df['RBOB_bbl'] = df['RBOB'] * GAL_TO_BBL
-    df['HO_bbl'] = df['HO'] * GAL_TO_BBL
-    df['WTI_bbl'] = df['WTI']
+            df = data.copy()
     
-    # Calculate 3:2:1 Crack Spread
-    df['Crack_Spread'] = (2 * df['RBOB_bbl'] + 1 * df['HO_bbl'] - 3 * df['WTI_bbl']) / 3
+        # Map columns to our internal names
+        rename_map = {v: k for k, v in TICKERS.items()}
+        df.rename(columns=rename_map, inplace=True)
+        df = df.dropna()
     
-    # Moving Averages
-    df['Crack_Spread_30MA'] = df['Crack_Spread'].rolling(window=30).mean()
-    df['Crack_Spread_90MA'] = df['Crack_Spread'].rolling(window=90).mean()
-    
-    return df
+        # Convert RBOB and Heating Oil to $/bbl
+        df['RBOB_bbl'] = df['RBOB'] * GAL_TO_BBL
+        df['HO_bbl'] = df['HO'] * GAL_TO_BBL
+        df['WTI_bbl'] = df['WTI']
+        
+        # Calculate 3:2:1 Crack Spread
+        df['Crack_Spread'] = (2 * df['RBOB_bbl'] + 1 * df['HO_bbl'] - 3 * df['WTI_bbl']) / 3
+        
+        # Moving Averages
+        df['Crack_Spread_30MA'] = df['Crack_Spread'].rolling(window=30).mean()
+        df['Crack_Spread_90MA'] = df['Crack_Spread'].rolling(window=90).mean()
+        
+        return df
+    except Exception as e:
+        st.error(f"Error processing yfinance data: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=1800)
 def fetch_and_score_news() -> pd.DataFrame:
