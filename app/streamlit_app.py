@@ -339,13 +339,23 @@ else:
     df_plot = df_news.copy()
     # Truncate title for chart
     df_plot['short_title'] = df_plot['title'].apply(lambda x: x[:60] + "..." if len(x) > 60 else x)
-    df_plot = df_plot.sort_values(by='Score', ascending=True)
+    
+    def make_signed_score(row):
+        if row['Sentiment'] == 'Bullish':
+            return row['Score']
+        elif row['Sentiment'] == 'Bearish':
+            return -row['Score']
+        else:
+            return 0.0
+
+    df_plot['signed_score'] = df_plot.apply(make_signed_score, axis=1)
+    df_plot = df_plot.sort_values(by='signed_score', ascending=True)
     
     color_map = {'Bullish': 'green', 'Bearish': 'red', 'Neutral': 'gray'}
     colors = df_plot['Sentiment'].map(color_map).tolist()
     
     fig_sent = go.Figure(go.Bar(
-        x=df_plot['Score'],
+        x=df_plot['signed_score'],
         y=df_plot['short_title'],
         orientation='h',
         marker_color=colors,
@@ -354,7 +364,7 @@ else:
     fig_sent.update_layout(
         title="Headline Sentiment Scores",
         height=650,
-        xaxis_title="FinBERT Confidence Score (0 = Low Confidence, 1 = High Confidence)",
+        xaxis_title="FinBERT Sentiment Score (Negative = Bearish, Positive = Bullish)",
         yaxis_title="",
         yaxis=dict(automargin=True, tickfont=dict(size=11)),
         template="plotly_white",
