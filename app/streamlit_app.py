@@ -318,7 +318,7 @@ st.dataframe(display_df.style.format("{:.2f}"))
 st.divider()
 
 # --- Market Sentiment Section ---
-st.subheader("📰 Market Sentiment — News Headlines")
+st.subheader("Market Sentiment — News Headlines")
 
 with st.spinner("Fetching and scoring recent headlines..."):
     df_news = fetch_and_score_news()
