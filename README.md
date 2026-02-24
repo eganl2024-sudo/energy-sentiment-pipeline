@@ -13,7 +13,9 @@ This project builds a live NLP sentiment pipeline for the energy sector. It scra
 
 Financial news is unstructured, continuous, and full of noise. Commodity markets like crude oil and refined products are forward-looking — futures prices reflect consensus expectations, but they lag the real-time narrative. A refinery margin can look healthy on paper while the news flow surrounding major refiners has turned sharply negative, a divergence that structured price data alone cannot capture.
 
-The challenge was twofold: first, extracting a clean, energy-relevant signal from noisy news feeds that mix sector-specific coverage with general market content; and second, scoring that text accurately enough to be useful. General-purpose sentiment tools like VADER misclassify financial language — a headline about an Exxon court case scores falsely positive simply because it contains no negative words, not because it is actually bullish for refining margins.
+The challenge was threefold: first, the project originally relied on stagnant, pre-downloaded CSV files for commodity price data — a structured but static foundation that made the dashboard immediately outdated the moment it was deployed. Second, extracting a clean, energy-relevant signal from noisy news feeds that mix sector-specific coverage with general market content required deliberate filtering. Third, scoring that text accurately enough to be useful proved harder than expected — general-purpose sentiment tools like VADER misclassify financial language, scoring a headline about an Exxon court case as falsely positive simply because it contains no negative words, not because it is actually bullish for refining margins.
+
+The project required solving all three: replacing static data with live API feeds, filtering noise from signal, and upgrading the NLP layer to a domain-trained model.
 
 ---
 
