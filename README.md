@@ -82,7 +82,7 @@ To facilitate interpretation of the sentiment signal, the pipeline operates alon
 Crack Spread ($/bbl) = (2 × RBOB_bbl + 1 × HO_bbl − 3 × WTI) / 3
 ```
 
-RBOB Gasoline and Heating Oil are fetched in $/gallon and converted to $/bbl by multiplying by 42 (gallons per barrel).
+RBOB Gasoline and Heating Oil are fetched in USD/gallon and converted to USD/bbl by multiplying by 42 (gallons per barrel).
 
 This structured layer provides essential market context for evaluating the unstructured sentiment signal. Both structured and unstructured layers are necessary, as neither alone offers a comprehensive perspective.
 
