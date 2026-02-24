@@ -54,13 +54,8 @@ def fetch_data(lookback_days: int) -> pd.DataFrame:
     start_date = end_date - datetime.timedelta(days=lookback_days + 150) # Buffer for 90D MA
     
     try:
-        # Custom session with user-agent to avoid Yahoo blocking Streamlit Cloud
-        session = requests.Session()
-        session.headers.update(
-            {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        )
         # Download data for all tickers
-        data = yf.download(list(tickers.values()), start=start_date, end=end_date, progress=False, session=session)
+        data = yf.download(list(tickers.values()), start=start_date, end=end_date, progress=False)
         
         if data.empty:
             st.warning("Yahoo Finance returned an empty dataset.")
@@ -128,15 +123,9 @@ def fetch_and_score_news() -> pd.DataFrame:
     seen_titles = set()
     rows = []
 
-    # Custom session with user-agent
-    session = requests.Session()
-    session.headers.update(
-        {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-    )
-
     for symbol in news_tickers:
         try:
-            t = yf.Ticker(symbol, session=session)
+            t = yf.Ticker(symbol)
             news_list = t.news or []
             for item in news_list:
                 # yfinance >=0.2.40 nests content inside a 'content' dict
