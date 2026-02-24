@@ -5,25 +5,25 @@
 
 ## What is the Project
 
-This project builds a live NLP sentiment pipeline for the energy sector. It scrapes real-time financial news headlines from six major energy equity tickers (VLO, PSX, MPC, XOM, CVX, COP) via the yfinance API, filters them for energy relevance, and scores each headline using FinBERT — a transformer model pre-trained on financial news. The output is a quantitative sentiment signal displayed alongside a live 3:2:1 crack spread monitor, enabling side-by-side comparison of what the market says versus what prices show.
+The project implements a live natural language processing (NLP) sentiment pipeline for the energy sector. Real-time financial news headlines are collected from six major energy equity tickers (VLO, PSX, MPC, XOM, CVX, COP) using the yfinance API, filtered for energy relevance, and scored using FinBERT, a transformer model trained on financial news. The resulting quantitative sentiment signal is displayed alongside a live 3:2:1 crack spread monitor, facilitating direct comparison between market sentiment and actual prices.
 
 ---
 
 ## What is the Problem
 
-Financial news is unstructured, continuous, and noisy. Commodity markets like crude oil and refined products are forward-looking — futures prices reflect consensus expectations, but they lag the real-time narrative. A refinery margin can look healthy on paper while the news flow surrounding major refiners has turned sharply negative, a divergence that structured price data alone cannot capture.
+Financial news is inherently unstructured, continuous, and frequently noisy. Commodity markets, including crude oil and refined products, are forward-looking, with futures prices reflecting consensus expectations. However, these prices often lag behind real-time news developments. In some cases, refinery margins may appear robust based on structured data, even when news coverage of major refiners is highly negative. This discrepancy cannot be captured by structured price data alone.
 
-The challenge was threefold: first, the project originally relied on stagnant, pre-downloaded CSV files for commodity price data. This structured but static foundation made the dashboard immediately outdated the moment it was deployed. Second, extracting a clean, energy-relevant signal from noisy news feeds that mix sector-specific coverage with general market content required deliberate filtering. Third, scoring that text accurately enough to be useful proved harder than expected — general-purpose sentiment tools like VADER misclassify financial language, scoring a headline about an Exxon court case as falsely positive simply because it contains no negative words, not because it is actually bullish for refining margins.
+Three primary challenges were encountered. Initially, reliance on pre-downloaded CSV files of commodity prices rendered the dashboard outdated upon launch. Additionally, extracting a clear, energy-focused signal from noisy news feeds, which often combined sector-specific and general market stories, necessitated rigorous filtering. Finally, accurately scoring news headlines proved difficult, as general sentiment tools such as VADER frequently misinterpret financial language. For example, VADER may rate a headline about an Exxon court case as positive due to the absence of negative words, despite the headline not representing favorable news for refining margins.
 
-The project required solving all three: replacing static data with live API feeds, filtering noise from signal, and upgrading the NLP layer to a domain-trained model.
+Addressing these challenges required replacing static data with live API feeds, implementing robust noise filtering to isolate relevant signals, and upgrading the NLP component to a domain-specific model.
 
 ---
 
 ## How Was It Solved
 
-News is sourced from equity tickers rather than futures tickers, because futures tickers (CL=F, RB=F, HO=F) consistently returned empty news feeds during testing. An energy-specific keyword filter (crude, oil, refin, gasoline, diesel, distillate, barrel, crack, WTI, Brent, upstream, downstream, margin, LNG, natural gas, pipeline, OPEC) eliminates off-topic articles before any scoring occurs.
+News is sourced from equity tickers instead of futures tickers, as the latter (`CL=F`, `RB=F`, `HO=F`) consistently returned empty news feeds during testing. An energy-specific keyword filter (crude, oil, refin, gasoline, diesel, distillate, barrel, crack, WTI, Brent, upstream, downstream, margin, LNG, natural gas, pipeline, OPEC) is applied to eliminate off-topic articles prior to sentiment scoring.
 
-For sentiment scoring, VADER was replaced with FinBERT (ProsusAI/finbert), a BERT-based transformer pre-trained on 10,000 labeled sentences from the Financial PhraseBank. Rather than loading model weights locally — which caused Streamlit Cloud to fail during deployment due to the size of the PyTorch dependency — the model is called via the HuggingFace Inference API, keeping the deployment footprint minimal.
+For sentiment scoring, VADER was replaced with **FinBERT** (`ProsusAI/finbert`), a BERT-based transformer trained on 10,000 labeled sentences from the Financial PhraseBank. Rather than loading model weights locally, which previously caused deployment failures on Streamlit Cloud due to the large PyTorch dependency, the model is now accessed via the HuggingFace Inference API. This approach maintains a lightweight deployment.
 
 ---
 
@@ -35,17 +35,17 @@ Energy analysts and traders currently read news manually and form qualitative ju
 
 ## Research Question
 
-**How can unstructured financial news data be transformed into a quantitative market sentiment signal for the energy sector?**
+**How can unstructured financial news data be transformed into a quantitative market sentiment signal for energy commodity markets, such as crude oil and refined products?** 
 
-Financial news headlines are produced continuously and contain real-time market opinion that does not appear in any structured data feed. This project builds a pipeline that ingests raw, unstructured headline text, applies NLP sentiment scoring, and surfaces a quantitative signal alongside structured commodity market data — enabling side-by-side comparison of what the market says versus what prices show.
+While futures prices reflect consensus expectations, they often lag behind real-time news. In some instances, refinery margins may appear strong based on structured data, even when news about major refiners is highly negative. This discrepancy is not captured by structured data alone. By extracting sentiment from raw headline text using NLP techniques and displaying it alongside price data, users can directly compare market sentiment with actual price movements.
 
 ---
 
 ## The Problem with Relying on Prices Alone
 
-Commodity markets, such as crude oil and refined products, are forward-looking. Futures prices reflect consensus expectations, but they lag the narrative. A refinery margin can look healthy on paper while the news flow surrounding major refiners has turned sharply negative — a divergence that structured data alone cannot capture.
+Commodity markets, including crude oil and refined products, are inherently forward-looking. Although futures prices reflect consensus expectations, they often lag behind prevailing news narratives. As a result, refinery margins may appear robust in structured data even when news coverage of major refiners is sharply negative, representing a divergence that structured data alone cannot capture.
 
-This project treats financial news as a primary data source, not an afterthought, and builds the transformation pipeline from raw text to a usable signal.
+This project treats financial news as a primary data source and constructs a pipeline that transforms raw text into a meaningful sentiment signal.
 
 ---
 
@@ -53,30 +53,30 @@ This project treats financial news as a primary data source, not an afterthought
 
 ### Data Source
 
-Raw headline text is collected via the `yfinance` news API across six major energy sector equities: **VLO, PSX, MPC, XOM, CVX, COP**. These tickers were deliberately chosen because their equity coverage directly reflects refining margin economics — news about these companies is structurally linked to the crack spread environment, not just general market noise.
+Raw headline text is collected using the `yfinance` news API for six major energy sector equities: **VLO, PSX, MPC, XOM, CVX, and COP**. These tickers were chosen because news about them is closely tied to refining margin economics and the crack spread environment, not just general market trends.
 
 Futures tickers (`CL=F`, `RB=F`, `HO=F`) were tested for news sourcing and consistently returned empty feeds. Equity tickers proved to be a reliable proxy for energy sector news volume.
 
 ### Text Processing
 
-Each headline is deduplicated by title string before scoring to prevent the same article from inflating sentiment counts when it appears across multiple ticker feeds. Headlines are then passed through an energy-specific keyword filter — only headlines containing at least one domain-relevant term (crude, oil, refin, gasoline, diesel, distillate, barrel, crack, WTI, Brent, upstream, downstream, margin, LNG, natural gas, pipeline, energy, fuel, petrochemical, OPEC) proceed to scoring. This eliminates general market noise that appears in energy equity news feeds but has no bearing on refining economics.
+Each headline is deduplicated by title string prior to scoring to prevent repeated articles from inflating sentiment counts across multiple ticker feeds. Headlines are subsequently filtered using an energy-specific keyword list; only those containing at least one domain-relevant term (crude, oil, refin, gasoline, diesel, distillate, barrel, crack, WTI, Brent, upstream, downstream, margin, LNG, natural gas, pipeline, energy, fuel, petrochemical, OPEC) proceed to sentiment scoring. This process eliminates general market noise present in energy equity news feeds that does not pertain to refining economics.
 
 ### Sentiment Scoring: FinBERT
 
-Sentiment classification uses **FinBERT** (`ProsusAI/finbert`), a BERT-based transformer pre-trained on 10,000 sentences from the Financial PhraseBank dataset. FinBERT was selected over general-purpose tools like VADER for two reasons:
+Sentiment classification uses **FinBERT** (`ProsusAI/finbert`), a BERT-based transformer trained on 10,000 sentences from the Financial PhraseBank dataset. FinBERT was chosen instead of general tools like VADER for two main reasons:
 
-1. **Domain calibration** — FinBERT understands financial language in context. A headline like “US Supreme Court to hear Exxon bid for compensation” is correctly read as contextually complex rather than scored as falsely positive due to neutral word valence.
-2. **Proven financial NLP benchmark** — FinBERT is the established baseline for financial sentiment classification and is directly applicable to energy-sector equity news.
+1. **Domain calibration**: FinBERT interprets financial language within its proper context. For example, a headline such as “US Supreme Court to hear Exxon bid for compensation” is recognized as contextually complex, rather than being incorrectly classified as positive due to neutral word valence.
+2. **Proven financial NLP benchmark**: FinBERT serves as a proven benchmark for financial sentiment analysis and demonstrates strong performance on energy-sector equity news.
 
-Each headline receives a classification of **Bullish**, **Bearish**, or **Neutral**, paired with a **confidence score (0.0–1.0)** representing the model’s certainty in that classification. This is distinct from VADER’s compound score (-1.0 to +1.0) — a score of 0.97 Bearish means the model is 97% confident the headline is bearish, not that it is “very bearish” on a continuous scale.
+Each headline is labeled as **Bullish**, **Bearish**, or **Neutral**, along with a **confidence score (0.0 to 1.0)** that shows how sure the model is. This is different from VADER’s compound score, which ranges from -1.0 to +1.0. For example, a 0.97 Bearish score means the model is 97% confident the headline is bearish, not that it is extremely bearish on a scale.
 
-The pipeline is called via the HuggingFace Inference API, eliminating the need to load model weights locally and keeping the deployment footprint minimal.
+The pipeline utilizes the HuggingFace Inference API, eliminating the need to load model weights locally and ensuring a lightweight deployment.
 
 ---
 
 ## Structured Context Layer: 3:2:1 Crack Spread
 
-To make the sentiment signal interpretable, the pipeline runs alongside a live crack spread monitor. The **3:2:1 crack spread** is the industry benchmark for US refinery gross margin, representing the profit from processing 3 barrels of crude oil into 2 barrels of gasoline and 1 barrel of distillate.
+To facilitate interpretation of the sentiment signal, the pipeline operates alongside a live crack spread monitor. The **3:2:1 crack spread** is the standard metric for US refinery gross margin, representing the profit from converting three barrels of crude oil into two barrels of gasoline and one barrel of distillate.
 
 ```
 Crack Spread ($/bbl) = (2 × RBOB_bbl + 1 × HO_bbl − 3 × WTI) / 3
@@ -84,7 +84,7 @@ Crack Spread ($/bbl) = (2 × RBOB_bbl + 1 × HO_bbl − 3 × WTI) / 3
 
 RBOB Gasoline and Heating Oil are fetched in $/gallon and converted to $/bbl by multiplying by 42 (gallons per barrel).
 
-This structured layer provides the factual market context against which the unstructured sentiment signal can be evaluated. The combination is the point — neither layer is sufficient on its own.
+This structured layer provides essential market context for evaluating the unstructured sentiment signal. Both structured and unstructured layers are necessary, as neither alone offers a comprehensive perspective.
 
 ---
 
@@ -92,7 +92,7 @@ This structured layer provides the factual market context against which the unst
 
 **Live Demo:** [https://energy-sentiment-pipeline.streamlit.app/](https://energy-sentiment-pipeline.streamlit.app/)
 
-The application is built in Streamlit and deployed live. All data is fetched in real time on startup with no pre-run pipeline or stored data required.
+The application is developed using Streamlit and operates in real time. All data is retrieved dynamically upon application startup, eliminating the need for pre-run pipelines or stored datasets.
 
 | Section | Description |
 |---|---|
@@ -127,8 +127,8 @@ Python 3.11 · Streamlit · yfinance · FinBERT (HuggingFace Inference API) · P
 
 ## Limitations and Future Work
 
-**FinBERT confidence scores are not sentiment magnitude scores.** A 0.97 Bullish score means the model is highly confident in its Bullish classification — it does not mean the headline is “more bullish” than a 0.75 Bullish headline. Interpreting the score axis requires understanding this distinction.
+**FinBERT confidence scores do not reflect the strength of the sentiment.** A 0.97 Bullish score means the model is very sure the headline is Bullish, but it does not mean the headline is more bullish than one with a 0.75 Bullish score. It is important to understand this difference when interpreting the scores. 
 
-**The yfinance availability bounds headline volume.** Typically, 10–20 articles per refresh cycle. A production pipeline would aggregate from multiple news APIs (Bloomberg, Reuters, Refinitiv) to increase signal volume and reduce dependence on a single free-tier source.
+**The yfinance availability bounds headline volume.** Typically, 10–20 articles per refresh cycle. In a production setting, the pipeline would combine news from several APIs (Bloomberg, Reuters, Refinitiv) to obtain more articles and avoid relying on a single free-tier source.
 
-**Sentiment without causality.** This pipeline produces a contemporaneous signal — it does not establish whether sentiment leads or lags price movements. A lagged correlation analysis between the daily aggregate sentiment score and next-day changes in the crack spread would be the appropriate next analytical step and the natural extension of this work.
+**Sentiment without causality.** The pipeline generates a real-time sentiment signal; however, it does not determine whether sentiment leads or follows price changes. The subsequent step involves analyzing the lagged correlation between daily sentiment scores and subsequent changes in the crack spread to assess the predictive capability of the sentiment signal for price movements.
