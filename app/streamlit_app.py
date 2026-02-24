@@ -19,7 +19,7 @@ def score_with_finbert(headline: str, api_token: str) -> dict:
                 time.sleep(5)  # model loading, wait and retry
                 continue
             if response.status_code != 200:
-                st.warning(f"HF API {response.status_code}: {response.text}")
+                pass
                 return {'sentiment': 'Neutral', 'score': 0.0}
             result = response.json()
             if isinstance(result, list) and len(result) > 0:
@@ -29,7 +29,7 @@ def score_with_finbert(headline: str, api_token: str) -> dict:
                 sentiment_map = {'positive': 'Bullish', 'negative': 'Bearish', 'neutral': 'Neutral'}
                 return {'sentiment': sentiment_map.get(label, 'Neutral'), 'score': round(score, 3)}
         except Exception as e:
-            st.warning(f"FinBERT error: {e}")
+            pass
             return {'sentiment': 'Neutral', 'score': 0.0}
             
     return {'sentiment': 'Neutral', 'score': 0.0}
