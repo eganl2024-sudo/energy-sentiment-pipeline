@@ -74,6 +74,8 @@ The application is built in Streamlit and deployed live. All data is fetched in 
 | Recent Daily Data | Last 10 trading days of raw and converted prices |
 | Market Sentiment | FinBERT-scored headlines with bar chart and sortable table |
 
+**Live Demo:** [https://energy-sentiment-pipeline.streamlit.app/](https://energy-sentiment-pipeline.streamlit.app/)
+
 **Cache policy:** Futures prices refresh every 5 minutes. News headlines and sentiment scores refresh every 30 minutes.
 
 ---
