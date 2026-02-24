@@ -6,7 +6,7 @@ import datetime
 import requests
 import time
 
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
+hf_api_url = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
 
 def score_with_finbert(headline: str, api_token: str) -> dict:
     headers = {"Authorization": f"Bearer {api_token}"}
@@ -14,7 +14,7 @@ def score_with_finbert(headline: str, api_token: str) -> dict:
     
     for attempt in range(3):  # retry up to 3 times
         try:
-            response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=15)
+            response = requests.post(hf_api_url, headers=headers, json=payload, timeout=15)
             if response.status_code == 503:
                 time.sleep(5)  # model loading, wait and retry
                 continue
@@ -39,12 +39,12 @@ st.set_page_config(page_title="3:2:1 Crack Spread Dashboard", layout="wide")
 
 # --- Constants ---
 # Tickers for Yahoo Finance
-TICKERS = {
+tickers = {
     'WTI': 'CL=F',   # Crude Oil
     'RBOB': 'RB=F',  # Gasoline (in $/gallon)
     'HO': 'HO=F'     # Heating Oil (in $/gallon)
 }
-GAL_TO_BBL = 42.0
+gal_to_bbl = 42.0
 
 # --- Helper Functions ---
 @st.cache_data(ttl=300)
@@ -55,7 +55,7 @@ def fetch_data(lookback_days: int) -> pd.DataFrame:
     
     try:
         # Download data for all tickers
-        data = yf.download(list(TICKERS.values()), start=start_date, end=end_date, progress=False)
+        data = yf.download(list(tickers.values()), start=start_date, end=end_date, progress=False)
         
         if data.empty:
             st.warning("Yahoo Finance returned an empty dataset.")
@@ -75,13 +75,13 @@ def fetch_data(lookback_days: int) -> pd.DataFrame:
             df = data.copy()
     
         # Map columns to our internal names
-        rename_map = {v: k for k, v in TICKERS.items()}
+        rename_map = {v: k for k, v in tickers.items()}
         df.rename(columns=rename_map, inplace=True)
         df = df.dropna()
     
         # Convert RBOB and Heating Oil to $/bbl
-        df['RBOB_bbl'] = df['RBOB'] * GAL_TO_BBL
-        df['HO_bbl'] = df['HO'] * GAL_TO_BBL
+        df['RBOB_bbl'] = df['RBOB'] * gal_to_bbl
+        df['HO_bbl'] = df['HO'] * gal_to_bbl
         df['WTI_bbl'] = df['WTI']
         
         # Calculate 3:2:1 Crack Spread
@@ -105,9 +105,9 @@ def fetch_and_score_news() -> pd.DataFrame:
     """
     # Energy sector tickers that reliably return news and are 
     # directly tied to refining margins and crack spreads
-    NEWS_TICKERS = ["VLO", "PSX", "MPC", "XOM", "CVX", "COP"]
+    news_tickers = ["VLO", "PSX", "MPC", "XOM", "CVX", "COP"]
     
-    ENERGY_KEYWORDS = [
+    energy_keywords = [
         "crude", "oil", "refin", "gasoline", "diesel", "distillate", "barrel", "crack", 
         "wti", "brent", "upstream", "downstream", "margin", "lng", "natural gas", "pipeline", 
         "energy", "fuel", "petrochemical", "opec"
@@ -123,7 +123,7 @@ def fetch_and_score_news() -> pd.DataFrame:
     seen_titles = set()
     rows = []
 
-    for symbol in NEWS_TICKERS:
+    for symbol in news_tickers:
         try:
             t = yf.Ticker(symbol)
             news_list = t.news or []
@@ -175,7 +175,7 @@ def fetch_and_score_news() -> pd.DataFrame:
                     
                 # Keyword pre-filter
                 title_lower = title.lower()
-                if not any(kw in title_lower for kw in ENERGY_KEYWORDS):
+                if not any(kw in title_lower for kw in energy_keywords):
                     continue
                     
                 seen_titles.add(title)
@@ -207,15 +207,15 @@ def fetch_and_score_news() -> pd.DataFrame:
 st.sidebar.title("Configuration")
 
 # Lookback Mapping
-LOOKBACK_OPTIONS = {
+lookback_options = {
     "1 Month": 30,
     "3 Months": 90,
     "6 Months": 180,
     "1 Year": 365,
     "2 Years": 730
 }
-selected_lookback = st.sidebar.selectbox("Lookback Period", list(LOOKBACK_OPTIONS.keys()), index=3) # Default 1 Year
-lookback_days = LOOKBACK_OPTIONS[selected_lookback]
+selected_lookback = st.sidebar.selectbox("Lookback Period", list(lookback_options.keys()), index=3) # Default 1 Year
+lookback_days = lookback_options[selected_lookback]
 
 st.sidebar.markdown("### 3:2:1 Crack Spread Formula")
 st.sidebar.latex(r'''Crack\ Spread = \frac{2 \times RBOB_{bbl} + 1 \times HO_{bbl} - 3 \times WTI}{3}''')
