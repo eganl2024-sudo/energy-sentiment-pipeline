@@ -3,6 +3,34 @@
 
 ---
 
+## What is the Project
+
+This project builds a live NLP sentiment pipeline for the energy sector. It scrapes real-time financial news headlines from six major energy equity tickers (VLO, PSX, MPC, XOM, CVX, COP) via the yfinance API, filters them for energy relevance, and scores each headline using FinBERT — a transformer model pre-trained on financial news. The output is a quantitative sentiment signal displayed alongside a live 3:2:1 crack spread monitor, enabling side-by-side comparison of what the market *says* versus what prices *show*.
+
+---
+
+## What is the Problem
+
+Financial news is unstructured, continuous, and full of noise. Commodity markets like crude oil and refined products are forward-looking — futures prices reflect consensus expectations, but they lag the real-time narrative. A refinery margin can look healthy on paper while the news flow surrounding major refiners has turned sharply negative, a divergence that structured price data alone cannot capture.
+
+The challenge was twofold: first, extracting a clean, energy-relevant signal from noisy news feeds that mix sector-specific coverage with general market content; and second, scoring that text accurately enough to be useful. General-purpose sentiment tools like VADER misclassify financial language — a headline about an Exxon court case scores falsely positive simply because it contains no negative words, not because it is actually bullish for refining margins.
+
+---
+
+## How Was It Solved
+
+News is sourced from equity tickers rather than futures tickers, because futures tickers (CL=F, RB=F, HO=F) consistently returned empty news feeds during testing. An energy-specific keyword filter (crude, oil, refin, gasoline, diesel, distillate, barrel, crack, WTI, Brent, upstream, downstream, margin, LNG, natural gas, pipeline, OPEC) eliminates off-topic articles before any scoring occurs.
+
+For sentiment scoring, VADER was replaced with FinBERT (ProsusAI/finbert), a BERT-based transformer pre-trained on 10,000 labeled sentences from the Financial PhraseBank. Rather than loading model weights locally — which caused Streamlit Cloud to fail during deployment due to the size of the PyTorch dependency — the model is called via the HuggingFace Inference API, keeping the deployment footprint minimal.
+
+---
+
+## Why Does it Matter
+
+Energy analysts and traders currently read news manually and form qualitative judgments about market tone. This pipeline automates that process and makes it quantitative. A daily aggregate sentiment score across the major refiners and integrated majors could serve as an early warning signal — flagging when the news narrative is diverging from what crack spread levels would suggest. The longer-term extension of this work is a lagged correlation analysis to determine whether the sentiment signal statistically leads or lags margin movements, which would establish whether it has predictive value as a trading signal.
+
+---
+
 ## Research Question
 
 **How can unstructured financial news data be transformed into a quantitative market sentiment signal for the energy sector?**
