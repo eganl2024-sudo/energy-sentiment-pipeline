@@ -19,7 +19,6 @@ def score_with_finbert(headline: str, api_token: str) -> dict:
                 time.sleep(5)  # model loading, wait and retry
                 continue
             if response.status_code != 200:
-                pass
                 return {'sentiment': 'Neutral', 'score': 0.0}
             result = response.json()
             if isinstance(result, list) and len(result) > 0:
@@ -29,7 +28,6 @@ def score_with_finbert(headline: str, api_token: str) -> dict:
                 sentiment_map = {'positive': 'Bullish', 'negative': 'Bearish', 'neutral': 'Neutral'}
                 return {'sentiment': sentiment_map.get(label, 'Neutral'), 'score': round(score, 3)}
         except Exception as e:
-            pass
             return {'sentiment': 'Neutral', 'score': 0.0}
             
     return {'sentiment': 'Neutral', 'score': 0.0}
@@ -99,9 +97,10 @@ def fetch_data(lookback_days: int) -> pd.DataFrame:
 @st.cache_data(ttl=1800)
 def fetch_and_score_news() -> pd.DataFrame:
     """
-    Fetches recent energy sector headlines from major refining/oil companies
-    and scores them with VADER sentiment. Uses equity tickers which reliably
-    return news via yfinance, rather than futures tickers which often return nothing.
+    Fetches recent energy sector headlines from major refining/oil companies,
+    applies an energy keyword pre-filter to eliminate market noise, and scores
+    each headline using FinBERT (ProsusAI/finbert) via the HuggingFace Inference API.
+    Returns Bullish, Bearish, or Neutral classification with a confidence score.
     """
     # Energy sector tickers that reliably return news and are 
     # directly tied to refining margins and crack spreads
@@ -248,7 +247,6 @@ ho_bbl_val = latest['HO_bbl']
 cs_30ma = latest['Crack_Spread_30MA']
 
 val_30d_ago = df_full['Crack_Spread'].iloc[-22] if len(df_full) >= 22 else df_full['Crack_Spread'].iloc[0]
-cs_1m_change = crack_spread_val - val_30d_ago
 
 # --- KPI Section ---
 st.subheader("Key Performance Indicators (Latest)")
@@ -356,7 +354,7 @@ else:
     fig_sent.update_layout(
         title="Headline Sentiment Scores",
         height=650,
-        xaxis_title="Compound Score",
+        xaxis_title="FinBERT Confidence Score (0 = Low Confidence, 1 = High Confidence)",
         yaxis_title="",
         yaxis=dict(automargin=True, tickfont=dict(size=11)),
         template="plotly_white",
