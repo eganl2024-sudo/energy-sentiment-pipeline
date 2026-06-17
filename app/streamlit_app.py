@@ -246,8 +246,6 @@ rbob_bbl_val = latest['RBOB_bbl']
 ho_bbl_val = latest['HO_bbl']
 cs_30ma = latest['Crack_Spread_30MA']
 
-val_30d_ago = df_full['Crack_Spread'].iloc[-22] if len(df_full) >= 22 else df_full['Crack_Spread'].iloc[0]
-
 # --- KPI Section ---
 st.subheader("Key Performance Indicators (Latest)")
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -326,20 +324,7 @@ with st.spinner("Fetching and scoring recent headlines..."):
 if df_news.empty:
     st.info("No recent news headlines available.")
 else:
-    avg_score = df_news['Score'].mean()
-    bullish_count = len(df_news[df_news['Sentiment'] == 'Bullish'])
-    bearish_count = len(df_news[df_news['Sentiment'] == 'Bearish'])
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Avg Headline Sentiment", f"{avg_score:.2f}")
-    c2.metric("Bullish Headlines", bullish_count)
-    c3.metric("Bearish Headlines", bearish_count)
-    
-    # Plotly Bar Chart
-    df_plot = df_news.copy()
-    # Truncate title for chart
-    df_plot['short_title'] = df_plot['title'].apply(lambda x: x[:60] + "..." if len(x) > 60 else x)
-    
+    # Compute signed scores first — used by both KPIs and charts
     def make_signed_score(row):
         if row['Sentiment'] == 'Bullish':
             return row['Score']
@@ -348,7 +333,74 @@ else:
         else:
             return 0.0
 
+    df_plot = df_news.copy()
     df_plot['signed_score'] = df_plot.apply(make_signed_score, axis=1)
+    df_plot['short_title'] = df_plot['title'].apply(lambda x: x[:60] + "..." if len(x) > 60 else x)
+
+    bullish_count = len(df_news[df_news['Sentiment'] == 'Bullish'])
+    bearish_count = len(df_news[df_news['Sentiment'] == 'Bearish'])
+    neutral_count = len(df_news[df_news['Sentiment'] == 'Neutral'])
+    total = len(df_news)
+    signed_avg = df_plot['signed_score'].mean()
+
+    net_ratio = (bullish_count - bearish_count) / total if total > 0 else 0
+    if net_ratio > 0.15:
+        net_signal, signal_color = "BULLISH", "🟢"
+    elif net_ratio < -0.15:
+        net_signal, signal_color = "BEARISH", "🔴"
+    else:
+        net_signal, signal_color = "NEUTRAL", "🟡"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Net Signal", f"{signal_color} {net_signal}",
+              f"{bullish_count}B / {bearish_count}Be / {neutral_count}N",
+              help="Net signal: (Bullish − Bearish) / Total. >15% net bullish = BULLISH, <-15% = BEARISH.")
+    c2.metric("Signed Avg Score", f"{signed_avg:+.3f}",
+              help="Mean of signed FinBERT scores: Bullish = +score, Bearish = −score, Neutral = 0. "
+                   "More meaningful than raw avg since confidence is always positive.")
+    c3.metric("Bullish Headlines", bullish_count)
+    c4.metric("Bearish Headlines", bearish_count)
+
+    with st.expander("🤖 What is FinBERT?", expanded=False):
+        st.markdown("""
+**FinBERT** (ProsusAI) is a BERT-based NLP model fine-tuned on financial news and SEC filings.
+It classifies text as **Positive / Negative / Neutral** with a confidence score (0–1).
+
+Here it's applied to energy sector headlines from VLO, PSX, MPC, XOM, CVX, and COP.
+Headlines pass an energy keyword pre-filter before scoring to eliminate off-topic noise.
+The signed score maps Positive → Bullish (+), Negative → Bearish (−), Neutral → 0.
+
+*Model runs via HuggingFace Inference API — no local GPU required.*
+        """)
+
+    # Sentiment trend over time
+    if 'Date' in df_plot.columns:
+        trend = (
+            df_plot.groupby('Date')['signed_score']
+            .mean()
+            .reset_index()
+            .sort_values('Date')
+        )
+        trend['color'] = trend['signed_score'].apply(
+            lambda x: 'green' if x > 0 else ('red' if x < 0 else 'gray')
+        )
+        fig_trend = go.Figure(go.Bar(
+            x=trend['Date'],
+            y=trend['signed_score'],
+            marker_color=trend['color'],
+        ))
+        fig_trend.add_hline(y=0, line_dash="dash", line_color="black")
+        fig_trend.update_layout(
+            title="Daily Average Sentiment (Signed Score)",
+            xaxis_title="Date",
+            yaxis_title="Signed Avg Score",
+            template="plotly_white",
+            height=300,
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+    # Plotly Bar Chart
     df_plot = df_plot.sort_values(by='signed_score', ascending=True)
     
     color_map = {'Bullish': 'green', 'Bearish': 'red', 'Neutral': 'gray'}
